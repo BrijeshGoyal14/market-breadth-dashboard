@@ -1,0 +1,7 @@
+streamlit
+pandas
+pyotp
+requests
+yfinance
+smartapi-python
+python-dotenv
