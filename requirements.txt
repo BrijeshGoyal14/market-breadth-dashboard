@@ -6,3 +6,4 @@ yfinance
 smartapi-python
 python-dotenv
 logzero
+websocket-client
