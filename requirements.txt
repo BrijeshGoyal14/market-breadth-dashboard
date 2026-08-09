@@ -5,3 +5,4 @@ requests
 yfinance
 smartapi-python
 python-dotenv
+logzero
