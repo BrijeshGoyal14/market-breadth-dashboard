@@ -282,7 +282,6 @@ def fetch_and_calculate():
 st.sidebar.header("Strategy Parameters")
 rs_period = st.sidebar.selectbox("Relative Strength Period", ["21 Days", "55 Days", "100 Days"], index=1)
 rsi_thresh = st.sidebar.slider("Minimum RSI", 30, 80, 50)
-sma_choice = st.sidebar.selectbox("Price Above SMA", ["SMA 20", "SMA 50", "SMA 100", "SMA 200"], index=1)
 display_mode = st.sidebar.radio("Weighting Mode", ["Number of Stocks", "% of Sector Market Cap"])
 
 with st.spinner("Fetching live market data..."):
@@ -290,17 +289,18 @@ with st.spinner("Fetching live market data..."):
 
 if not master_df.empty:
     rs_col = {"21 Days": "RS_21", "55 Days": "RS_55", "100 Days": "RS_100"}[rs_period]
-    sma_col = {"SMA 20": "SMA_20", "SMA 50": "SMA_50", "SMA 100": "SMA_100", "SMA 200": "SMA_200"}[sma_choice]
 
-    # Apply Pass/Fail logic dynamically based on sidebar
+    # Apply Pass/Fail logic dynamically for all indicators
     master_df["RS_Pass"] = master_df[rs_col].apply(lambda x: 1 if pd.notna(x) and x > 0 else 0)
     master_df["RSI_Pass"] = master_df["RSI_14"].apply(lambda x: 1 if pd.notna(x) and x > rsi_thresh else 0)
-    master_df["SMA_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row[sma_col]) and row["CurrentPrice"] > row[sma_col] else 0, axis=1)
+    master_df["SMA20_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_20"]) and row["CurrentPrice"] > row["SMA_20"] else 0, axis=1)
+    master_df["SMA50_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_50"]) and row["CurrentPrice"] > row["SMA_50"] else 0, axis=1)
+    master_df["SMA100_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_100"]) and row["CurrentPrice"] > row["SMA_100"] else 0, axis=1)
+    master_df["SMA200_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_200"]) and row["CurrentPrice"] > row["SMA_200"] else 0, axis=1)
     master_df["VolumeSurge"] = master_df.apply(lambda row: 1 if row["Volume"] > (1.5 * row["AvgVolume"]) else 0, axis=1)
 
     sectors = master_df["Sector"].unique()
     
-    # Create two separate lists: one for table text, one for chart numbers
     dashboard_data_table = []
     dashboard_data_chart = []
 
@@ -309,7 +309,6 @@ if not master_df.empty:
         total_mc = sec_df["MarketCap"].sum()
         total_stocks = len(sec_df)
 
-        # Calculates text format (e.g., "7 / 10" or "70.0%") for the Dataframe
         def get_table_val(flag):
             if display_mode == "Number of Stocks":
                 return f"{sec_df[flag].sum()} / {total_stocks}"
@@ -317,7 +316,6 @@ if not master_df.empty:
                 passed_mc = sec_df[sec_df[flag] == 1]["MarketCap"].sum()
                 return f"{(passed_mc / total_mc * 100):.1f}%" if total_mc > 0 else "0.0%"
 
-        # Calculates pure math (e.g., 70.0) so the Plotly chart can draw the bars
         def get_chart_val(flag):
             if display_mode == "Number of Stocks":
                 return (sec_df[flag].sum() / total_stocks * 100) if total_stocks > 0 else 0
@@ -329,7 +327,10 @@ if not master_df.empty:
             "Sectors": sector,
             f"RS > 0 ({rs_period})": get_table_val("RS_Pass"),
             f"RSI > {rsi_thresh}": get_table_val("RSI_Pass"),
-            sma_choice: get_table_val("SMA_Pass")
+            "SMA 20": get_table_val("SMA20_Pass"),
+            "SMA 50": get_table_val("SMA50_Pass"),
+            "SMA 100": get_table_val("SMA100_Pass"),
+            "SMA 200": get_table_val("SMA200_Pass")
         })
         
         dashboard_data_chart.append({
@@ -340,49 +341,70 @@ if not master_df.empty:
     final_table_df = pd.DataFrame(dashboard_data_table)
     final_chart_df = pd.DataFrame(dashboard_data_chart)
 
-    # Top Visual Chart (Uses numerical data)
+    # Top Visual Chart
     st.subheader(f"Sector Rotation ({display_mode})")
     fig = px.bar(final_chart_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
     st.plotly_chart(fig, use_container_width=True)
 
-    left_col, right_col = st.columns([2.5, 1.5], gap="large")
+    # Main Data Table
+    st.subheader("Market Breadth Data")
+    st.dataframe(final_table_df, width="stretch", hide_index=True)
+    
+    if st.button("Refresh Live Data"):
+        st.cache_data.clear()
+        st.rerun()
 
-    with left_col:
-        st.subheader("Market Breadth Data")
-        
-        # Display the cleanly formatted text table
-        st.dataframe(final_table_df, width="stretch", hide_index=True)
-        
-        if st.button("Refresh Live Data"):
-            st.cache_data.clear()
-            st.rerun()
-
-    with right_col:
-        st.subheader("Screener & Export")
+    st.markdown("---")
+    
+    # Screener Section (Full Width Layout)
+    st.subheader("Screener & Export")
+    
+    # Placing selectors side-by-side using columns
+    sel_col1, sel_col2, sel_col3 = st.columns(3)
+    with sel_col1:
         selected_sector = st.selectbox("1. Select a Sector:", final_table_df["Sectors"].tolist())
-        selected_indicator = st.selectbox("2. Select an Indicator:", ["Relative Strength", "RSI Threshold", "Moving Average", "Volume Surge"])
+    with sel_col2:
+        selected_indicator = st.selectbox(
+            "2. Select an Indicator:", 
+            ["Relative Strength", "RSI Threshold", "SMA 20", "SMA 50", "SMA 100", "SMA 200", "Volume Surge"]
+        )
+    with sel_col3:
         sort_by = st.selectbox("3. Sort Results By:", ["Highest % Gain", "Highest RSI", "Highest RS"])
+    
+    flag_map = {
+        "Relative Strength": "RS_Pass", 
+        "RSI Threshold": "RSI_Pass", 
+        "SMA 20": "SMA20_Pass", 
+        "SMA 50": "SMA50_Pass", 
+        "SMA 100": "SMA100_Pass", 
+        "SMA 200": "SMA200_Pass", 
+        "Volume Surge": "VolumeSurge"
+    }
+    
+    winning_stocks = master_df[(master_df["Sector"] == selected_sector) & (master_df[flag_map[selected_indicator]] == 1)].copy()
+
+    if sort_by == "Highest % Gain":
+        winning_stocks = winning_stocks.sort_values(by="ChangePct", ascending=False)
+    elif sort_by == "Highest RSI":
+        winning_stocks = winning_stocks.sort_values(by="RSI_14", ascending=False)
+    else:
+        winning_stocks = winning_stocks.sort_values(by=rs_col, ascending=False)
+
+    # CSV Download Button
+    if not winning_stocks.empty:
+        csv = winning_stocks[["Ticker", "CurrentPrice", "ChangePct", "RSI_14", rs_col, "VolumeSurge"]].to_csv(index=False).encode('utf-8')
+        st.download_button(label="Download Data (CSV)", data=csv, file_name=f"{selected_sector}_screener.csv", mime="text/csv")
         
-        flag_map = {"Relative Strength": "RS_Pass", "RSI Threshold": "RSI_Pass", "Moving Average": "SMA_Pass", "Volume Surge": "VolumeSurge"}
-        winning_stocks = master_df[(master_df["Sector"] == selected_sector) & (master_df[flag_map[selected_indicator]] == 1)].copy()
-
-        if sort_by == "Highest % Gain":
-            winning_stocks = winning_stocks.sort_values(by="ChangePct", ascending=False)
-        elif sort_by == "Highest RSI":
-            winning_stocks = winning_stocks.sort_values(by="RSI_14", ascending=False)
-        else:
-            winning_stocks = winning_stocks.sort_values(by=rs_col, ascending=False)
-
-        # CSV Download Button
-        if not winning_stocks.empty:
-            csv = winning_stocks[["Ticker", "CurrentPrice", "ChangePct", "RSI_14", rs_col, "VolumeSurge"]].to_csv(index=False).encode('utf-8')
-            st.download_button(label="Download Data (CSV)", data=csv, file_name=f"{selected_sector}_screener.csv", mime="text/csv")
-
-            for _, stock in winning_stocks.iterrows():
-                color = "green" if stock["ChangeRs"] >= 0 else "red"
-                sign = "+" if stock["ChangeRs"] >= 0 else ""
-                surge_text = " | <strong>Volume Breakout</strong>" if stock["VolumeSurge"] == 1 else ""
-                
+        # Grid layout for stock cards
+        st.write("")
+        cols = st.columns(3)
+        for i, (_, stock) in enumerate(winning_stocks.iterrows()):
+            col = cols[i % 3] # Distributes cards evenly across 3 columns
+            color = "green" if stock["ChangeRs"] >= 0 else "red"
+            sign = "+" if stock["ChangeRs"] >= 0 else ""
+            surge_text = " | <strong>Volume Breakout</strong>" if stock["VolumeSurge"] == 1 else ""
+            
+            with col:
                 st.markdown(
                     f"""
                     <div style="border:1px solid #ddd; padding:10px; border-radius:5px; margin-bottom:10px;">
@@ -394,7 +416,7 @@ if not master_df.empty:
                     """, 
                     unsafe_allow_html=True
                 )
-        else:
-            st.write("No stocks meet this criteria right now.")
+    else:
+        st.write("No stocks meet this criteria right now.")
 else:
     st.error("Failed to load dashboard data.")
