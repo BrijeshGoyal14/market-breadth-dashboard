@@ -27,58 +27,109 @@ st.set_page_config(layout="wide", page_title="Indian Sector Dashboard")
 st.title("Indian Market Sector Dashboard")
 st.markdown("Advanced breadth tracking with dynamic Relative Strength and volume profiling.")
 
-# 2. Define Stocks and Sectors
+# 2. Define Stocks and Sectors (Expanded Nifty 500 Universe)
 STOCKS = {
+    # Financial Services
     "HDFCBANK-EQ": "Financials", "ICICIBANK-EQ": "Financials", "SBIN-EQ": "Financials",
     "AXISBANK-EQ": "Financials", "KOTAKBANK-EQ": "Financials", "BAJFINANCE-EQ": "Financials",
     "CHOLAFIN-EQ": "Financials", "MUTHOOTFIN-EQ": "Financials", "PFC-EQ": "Financials",
     "RECLTD-EQ": "Financials", "HDFCLIFE-EQ": "Financials", "SBILIFE-EQ": "Financials",
     "BAJAJFINSV-EQ": "Financials", "INDUSINDBK-EQ": "Financials", "PNB-EQ": "Financials",
     "BANKBARODA-EQ": "Financials", "IOB-EQ": "Financials", "UNIONBANK-EQ": "Financials",
+    "CANBK-EQ": "Financials", "IDFCFIRSTB-EQ": "Financials", "FEDERALBNK-EQ": "Financials",
+
+    # Information Technology
     "TCS-EQ": "IT", "INFY-EQ": "IT", "WIPRO-EQ": "IT",
     "HCLTECH-EQ": "IT", "TECHM-EQ": "IT", "LTIM-EQ": "IT",
     "PERSISTENT-EQ": "IT", "COFORGE-EQ": "IT", "MPHASIS-EQ": "IT",
     "KPITTECH-EQ": "IT", "TATAELXSI-EQ": "IT", "OFSS-EQ": "IT", "CYIENT-EQ": "IT",
+    "BSOFT-EQ": "IT", "SONATSOFTW-EQ": "IT", "INTELLECT-EQ": "IT",
+
+    # Oil, Gas & Consumable Fuels
     "RELIANCE-EQ": "Oil & Gas", "ONGC-EQ": "Oil & Gas", "COALINDIA-EQ": "Oil & Gas",
     "BPCL-EQ": "Oil & Gas", "IOC-EQ": "Oil & Gas", "HINDPETRO-EQ": "Oil & Gas",
     "GAIL-EQ": "Oil & Gas", "IGL-EQ": "Oil & Gas", "MGL-EQ": "Oil & Gas",
     "PETRONET-EQ": "Oil & Gas", "GUJGASLTD-EQ": "Oil & Gas", "OIL-EQ": "Oil & Gas",
+    "CASTROLIND-EQ": "Oil & Gas", "AEGISCHEM-EQ": "Oil & Gas",
+
+    # Automobile and Auto Components
     "BAJAJ-AUTO-EQ": "Automobile", "M&M-EQ": "Automobile", "MARUTI-EQ": "Automobile",
     "HEROMOTOCO-EQ": "Automobile", "EICHERMOT-EQ": "Automobile", "TVSMOTOR-EQ": "Automobile", 
     "ASHOKLEY-EQ": "Automobile", "MRF-EQ": "Automobile", "BOSCHLTD-EQ": "Automobile", 
     "MOTHERSON-EQ": "Automobile", "BALKRISIND-EQ": "Automobile", "TIINDIA-EQ": "Automobile",
+    "ESCORTS-EQ": "Automobile", "SONACOMS-EQ": "Automobile", "ENDURANCE-EQ": "Automobile",
+
+    # Healthcare
     "SUNPHARMA-EQ": "Healthcare", "CIPLA-EQ": "Healthcare", "DRREDDY-EQ": "Healthcare",
     "DIVISLAB-EQ": "Healthcare", "APOLLOHOSP-EQ": "Healthcare", "LUPIN-EQ": "Healthcare",
     "AUROPHARMA-EQ": "Healthcare", "ZYDUSLIFE-EQ": "Healthcare", "BIOCON-EQ": "Healthcare",
     "MAXHEALTH-EQ": "Healthcare", "SYNGENE-EQ": "Healthcare", "LALPATHLAB-EQ": "Healthcare",
+    "GLENMARK-EQ": "Healthcare", "IPCALAB-EQ": "Healthcare", "ALKEM-EQ": "Healthcare",
+
+    # Fast Moving Consumer Goods (FMCG)
     "ITC-EQ": "FMCG", "HUL-EQ": "FMCG", "NESTLEIND-EQ": "FMCG",
     "BRITANNIA-EQ": "FMCG", "TATACONSUM-EQ": "FMCG", "GODREJCP-EQ": "FMCG",
     "DABUR-EQ": "FMCG", "MARICO-EQ": "FMCG", "COLPAL-EQ": "FMCG",
     "VBL-EQ": "FMCG", "UBL-EQ": "FMCG", "MCDOWELL-N-EQ": "FMCG",
+    "EMAMILTD-EQ": "FMCG", "RADICO-EQ": "FMCG", "PGHH-EQ": "FMCG",
+
+    # Metals & Mining (Expanded)
     "TATASTEEL-EQ": "Metals", "JSWSTEEL-EQ": "Metals", "HINDALCO-EQ": "Metals",
     "VEDL-EQ": "Metals", "JINDALSTEL-EQ": "Metals", "NMDC-EQ": "Metals",
     "SAIL-EQ": "Metals", "NATIONALUM-EQ": "Metals", "HINDZINC-EQ": "Metals",
+    "APLAPOLLO-EQ": "Metals", "JSL-EQ": "Metals", "WELCORP-EQ": "Metals", 
+    "SHYAMMETL-EQ": "Metals", "RATNAMANI-EQ": "Metals",
+
+    # Construction Materials / Cement (Expanded)
     "GRASIM-EQ": "Construction Mat", "ULTRACEMCO-EQ": "Construction Mat", "SHREECEM-EQ": "Construction Mat",
     "AMBUJACEM-EQ": "Construction Mat", "ACC-EQ": "Construction Mat", "DALBHARAT-EQ": "Construction Mat",
     "RAMCOCEM-EQ": "Construction Mat", "JKCEMENT-EQ": "Construction Mat", "COROMANDEL-EQ": "Construction Mat",
+    "INDIACEM-EQ": "Construction Mat", "JKLAKSHMI-EQ": "Construction Mat", "BIRLACORPN-EQ": "Construction Mat",
+    "STARCEMENT-EQ": "Construction Mat", "NUVOCO-EQ": "Construction Mat",
+
+    # Telecommunication (Expanded)
     "BHARTIARTL-EQ": "Telecom", "IDEA-EQ": "Telecom", "TATACOMM-EQ": "Telecom",
     "INDUSTOWER-EQ": "Telecom", "ROUTE-EQ": "Telecom", "TEJASNET-EQ": "Telecom",
+    "HFCL-EQ": "Telecom", "RAILTEL-EQ": "Telecom", "ITI-EQ": "Telecom",
+
+    # Power (Expanded)
     "NTPC-EQ": "Power", "POWERGRID-EQ": "Power", "TATAPOWER-EQ": "Power",
     "ADANIGREEN-EQ": "Power", "ADANIPOWER-EQ": "Power", "JSWENERGY-EQ": "Power",
     "NHPC-EQ": "Power", "TORNTPOWER-EQ": "Power", "CESC-EQ": "Power",
+    "SJVN-EQ": "Power", "NLCINDIA-EQ": "Power", "IEX-EQ": "Power", "PTC-EQ": "Power",
+
+    # Capital Goods & Defence (Expanded)
     "SIEMENS-EQ": "Capital Goods", "ABB-EQ": "Capital Goods", "HAL-EQ": "Capital Goods",
     "BEL-EQ": "Capital Goods", "CUMMINSIND-EQ": "Capital Goods", "CGPOWER-EQ": "Capital Goods",
     "POLYCAB-EQ": "Capital Goods", "HAVELLS-EQ": "Capital Goods", "SUZLON-EQ": "Capital Goods",
+    "BDL-EQ": "Capital Goods", "MAZDOCK-EQ": "Capital Goods", "COCHINSHIP-EQ": "Capital Goods",
+    "BHEL-EQ": "Capital Goods", "THERMAX-EQ": "Capital Goods", "KEI-EQ": "Capital Goods",
+
+    # Chemicals (Expanded)
     "PIDILITIND-EQ": "Chemicals", "SRF-EQ": "Chemicals", "TATACHEM-EQ": "Chemicals",
     "DEEPAKNTR-EQ": "Chemicals", "AARTIIND-EQ": "Chemicals", "ATUL-EQ": "Chemicals",
     "NAVINFLUOR-EQ": "Chemicals", "PIIND-EQ": "Chemicals", "UPL-EQ": "Chemicals",
+    "LINDEINDIA-EQ": "Chemicals", "SOLARINDS-EQ": "Chemicals", "BALAMINES-EQ": "Chemicals",
+    "ALKYLAMINE-EQ": "Chemicals", "CLEAN-EQ": "Chemicals", "SUMICHEM-EQ": "Chemicals",
+
+    # Consumer Services & Retail (Expanded)
     "TRENT-EQ": "Consumer Retail", "ZOMATO-EQ": "Consumer Retail", "NYKAA-EQ": "Consumer Retail",
     "DMART-EQ": "Consumer Retail", "TITAN-EQ": "Consumer Retail", "JUBLFOOD-EQ": "Consumer Retail",
     "IRCTC-EQ": "Consumer Retail", "PAGEIND-EQ": "Consumer Retail", "BATAINDIA-EQ": "Consumer Retail",
+    "DEVYANI-EQ": "Consumer Retail", "WESTLIFE-EQ": "Consumer Retail", "RELAXO-EQ": "Consumer Retail",
+    "METROBRAND-EQ": "Consumer Retail", "KALYANKJIL-EQ": "Consumer Retail", "SAPPHIRE-EQ": "Consumer Retail",
+
+    # Realty / Real Estate (Expanded)
     "DLF-EQ": "Real Estate", "MACROTECH-EQ": "Real Estate", "GODREJPROP-EQ": "Real Estate",
     "OBEROIRLTY-EQ": "Real Estate", "PRESTIGE-EQ": "Real Estate", "PHOENIXLTD-EQ": "Real Estate",
+    "BRIGADE-EQ": "Real Estate", "SOBHA-EQ": "Real Estate", "MAHLIFE-EQ": "Real Estate",
+    "PURVA-EQ": "Real Estate", "SUNTECK-EQ": "Real Estate",
+
+    # Infrastructure & Construction (Expanded)
     "LT-EQ": "Infrastructure", "GMRINFRA-EQ": "Infrastructure", "IRB-EQ": "Infrastructure",
-    "RVNL-EQ": "Infrastructure", "IRCON-EQ": "Infrastructure", "KEC-EQ": "Infrastructure"
+    "RVNL-EQ": "Infrastructure", "IRCON-EQ": "Infrastructure", "KEC-EQ": "Infrastructure",
+    "NBCC-EQ": "Infrastructure", "NCC-EQ": "Infrastructure", "RITES-EQ": "Infrastructure",
+    "ENGINERSIN-EQ": "Infrastructure", "PNCINFRA-EQ": "Infrastructure", "GRINFRA-EQ": "Infrastructure"
 }
 
 # 3. Helper: Fetch Market Caps Fast (Parallel) via Yahoo Finance
