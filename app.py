@@ -248,31 +248,50 @@ if not master_df.empty:
     master_df["VolumeSurge"] = master_df.apply(lambda row: 1 if row["Volume"] > (1.5 * row["AvgVolume"]) else 0, axis=1)
 
     sectors = master_df["Sector"].unique()
-    dashboard_data = []
+    
+    # Create two separate lists: one for table text, one for chart numbers
+    dashboard_data_table = []
+    dashboard_data_chart = []
 
     for sector in sectors:
         sec_df = master_df[master_df["Sector"] == sector]
         total_mc = sec_df["MarketCap"].sum()
+        total_stocks = len(sec_df)
 
-        def calc_metric(flag):
+        # Calculates text format (e.g., "7 / 10" or "70.0%") for the Dataframe
+        def get_table_val(flag):
             if display_mode == "Number of Stocks":
-                return sec_df[flag].sum() / len(sec_df) * 100 if len(sec_df) > 0 else 0
+                return f"{sec_df[flag].sum()} / {total_stocks}"
+            else:
+                passed_mc = sec_df[sec_df[flag] == 1]["MarketCap"].sum()
+                return f"{(passed_mc / total_mc * 100):.1f}%" if total_mc > 0 else "0.0%"
+
+        # Calculates pure math (e.g., 70.0) so the Plotly chart can draw the bars
+        def get_chart_val(flag):
+            if display_mode == "Number of Stocks":
+                return (sec_df[flag].sum() / total_stocks * 100) if total_stocks > 0 else 0
             else:
                 passed_mc = sec_df[sec_df[flag] == 1]["MarketCap"].sum()
                 return (passed_mc / total_mc * 100) if total_mc > 0 else 0
 
-        dashboard_data.append({
+        dashboard_data_table.append({
             "Sectors": sector,
-            f"RS > 0 ({rs_period})": calc_metric("RS_Pass"),
-            f"RSI > {rsi_thresh}": calc_metric("RSI_Pass"),
-            sma_choice: calc_metric("SMA_Pass")
+            f"RS > 0 ({rs_period})": get_table_val("RS_Pass"),
+            f"RSI > {rsi_thresh}": get_table_val("RSI_Pass"),
+            sma_choice: get_table_val("SMA_Pass")
+        })
+        
+        dashboard_data_chart.append({
+            "Sectors": sector,
+            f"RS > 0 ({rs_period})": get_chart_val("RS_Pass")
         })
 
-    final_df = pd.DataFrame(dashboard_data)
+    final_table_df = pd.DataFrame(dashboard_data_table)
+    final_chart_df = pd.DataFrame(dashboard_data_chart)
 
-    # Top Visual Chart
+    # Top Visual Chart (Uses numerical data)
     st.subheader(f"Sector Rotation ({display_mode})")
-    fig = px.bar(final_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
+    fig = px.bar(final_chart_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
     st.plotly_chart(fig, use_container_width=True)
 
     left_col, right_col = st.columns([2.5, 1.5], gap="large")
@@ -280,19 +299,16 @@ if not master_df.empty:
     with left_col:
         st.subheader("Market Breadth Data")
         
-        # Display formatted percentages in the table
-        display_df = final_df.copy()
-        for col in display_df.columns[1:]:
-            display_df[col] = display_df[col].apply(lambda x: f"{x:.1f}%")
+        # Display the cleanly formatted text table
+        st.dataframe(final_table_df, width="stretch", hide_index=True)
         
-        st.dataframe(display_df, width="stretch", hide_index=True)
         if st.button("Refresh Live Data"):
             st.cache_data.clear()
             st.rerun()
 
     with right_col:
         st.subheader("Screener & Export")
-        selected_sector = st.selectbox("1. Select a Sector:", final_df["Sectors"].tolist())
+        selected_sector = st.selectbox("1. Select a Sector:", final_table_df["Sectors"].tolist())
         selected_indicator = st.selectbox("2. Select an Indicator:", ["Relative Strength", "RSI Threshold", "Moving Average", "Volume Surge"])
         sort_by = st.selectbox("3. Sort Results By:", ["Highest % Gain", "Highest RSI", "Highest RS"])
         
