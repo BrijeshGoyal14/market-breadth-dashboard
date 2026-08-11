@@ -14,6 +14,15 @@ from dotenv import load_dotenv
 # Load environment variables from the .env file BEFORE setting credentials
 load_dotenv()
 
+# Helper function to read local Markdown files
+def load_markdown(file_name):
+    """Loads a Markdown file from the root directory safely."""
+    file_path = os.path.join(os.path.dirname(__file__), file_name)
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return f"File `{file_name}` not found in the root directory."
+
 # ==========================================
 # 1. API CREDENTIALS
 # ==========================================
