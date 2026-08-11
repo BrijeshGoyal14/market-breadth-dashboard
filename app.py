@@ -6,6 +6,7 @@ import time
 import yfinance as yf
 import concurrent.futures
 import plotly.express as px
+import numpy as np
 from SmartApi import SmartConnect
 from datetime import datetime, timedelta
 import os
@@ -45,6 +46,30 @@ def load_css(file_name):
 
 # Inject Apple Design System
 load_css("design.css")
+
+# Create the top-middle tab navigation
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col2:
+    selected_tab = st.radio(
+        "Navigation",
+        ["📊 Market Breadth", "🚀 Pro Breakout Screener"],
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+
+st.divider() # Adds a clean horizontal line below the tabs
+
+# Route the app based on the selected tab
+if selected_tab == "📊 Market Breadth":
+    # --- YOUR EXISTING DASHBOARD CODE GOES HERE ---
+    st.title("Indian Market Sector Dashboard")
+    # ...
+    
+elif selected_tab == "🚀 Pro Breakout Screener":
+    # --- YOUR NEW FEATURE CODE GOES HERE ---
+    st.title("Institutional Breakout Screener")
+    st.info("Analysis engine running...")
 
 st.title("Indian Market Sector Dashboard")
 st.markdown("Advanced breadth tracking with dynamic Relative Strength and volume profiling.")
