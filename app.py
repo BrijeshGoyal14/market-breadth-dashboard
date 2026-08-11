@@ -33,6 +33,19 @@ TOTP_SECRET = os.getenv("TOTP_SECRET")
 
 # Page Configuration
 st.set_page_config(layout="wide", page_title="Indian Sector Dashboard")
+
+import os
+
+def load_css(file_name):
+    """Loads a CSS file from the root directory safely."""
+    file_path = os.path.join(os.path.dirname(__file__), file_name)
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+# Inject Apple Design System
+load_css("design.css")
+
 st.title("Indian Market Sector Dashboard")
 st.markdown("Advanced breadth tracking with dynamic Relative Strength and volume profiling.")
 
@@ -414,15 +427,19 @@ if not master_df.empty:
             surge_text = " | <strong>Volume Breakout</strong>" if stock["VolumeSurge"] == 1 else ""
             
             with col:
+                # Flushed left to prevent Streamlit from triggering Markdown code blocks
                 st.markdown(
-                    f"""
-                    <div style="border:1px solid #ddd; padding:10px; border-radius:5px; margin-bottom:10px;">
-                        <strong>{stock['Ticker']}</strong><span style="color:#0056b3; font-size:0.9em;">{surge_text}</span><br>
-                        Price: ₹{stock['CurrentPrice']:.2f} <br>
-                        Change: <span style="color:{color};">{sign}₹{stock['ChangeRs']:.2f} ({sign}{stock['ChangePct']:.2f}%)</span><br>
-                        <span style="font-size: 0.85em; color: gray;">RSI: {stock['RSI_14']:.1f} | RS: {stock[rs_col]*100:.1f}%</span>
-                    </div>
-                    """, 
+                    f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 16px;">
+<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 17px; color: #1d1d1f;">{stock['Ticker']}</span>
+<span style="color: #0066cc; font-size: 14px; font-weight: 400;">{surge_text}</span><br>
+<div style="margin-top: 12px; font-size: 17px; color: #1d1d1f; font-weight: 400; line-height: 1.47;">
+₹{stock['CurrentPrice']:.2f} <br>
+<span style="color: {color}; font-weight: 600;">{sign}₹{stock['ChangeRs']:.2f} ({sign}{stock['ChangePct']:.2f}%)</span><br>
+</div>
+<div style="margin-top: 17px; font-size: 14px; color: #7a7a7a; font-weight: 400;">
+RSI: {stock['RSI_14']:.1f} &nbsp;|&nbsp; RS: {stock[rs_col]*100:.1f}%
+</div>
+</div>""", 
                     unsafe_allow_html=True
                 )
     else:
