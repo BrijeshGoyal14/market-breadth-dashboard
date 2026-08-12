@@ -1,0 +1,59 @@
+/* Import Inter as the closest open-source fallback to SF Pro */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+/* Typography & Canvas Base */
+html, body, [class*="css"] {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif !important;
+    color: #1d1d1f !important;
+    font-size: 17px !important;
+    line-height: 1.47 !important;
+    letter-spacing: -0.374px !important;
+    background-color: #ffffff !important;
+}
+
+/* Sidebar (Parchment Surface) */
+[data-testid="stSidebar"] {
+    background-color: #f5f5f7 !important;
+    border-right: 1px solid #e0e0e0 !important;
+}
+
+/* Display Typography (Headlines) */
+h1, h2, h3, [data-testid="stHeader"] {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", sans-serif !important;
+    font-weight: 600 !important;
+    color: #1d1d1f !important;
+    letter-spacing: -0.374px !important;
+}
+
+/* Primary CTAs (Action Blue Pills) */
+.stButton > button, .stDownloadButton > button {
+    background-color: #0066cc !important;
+    color: #ffffff !important;
+    border-radius: 9999px !important;
+    padding: 11px 22px !important;
+    font-size: 17px !important;
+    font-weight: 400 !important;
+    border: none !important;
+    transition: transform 0.1s ease;
+}
+
+/* Button Micro-interactions */
+.stButton > button:active, .stDownloadButton > button:active {
+    transform: scale(0.95) !important;
+}
+.stButton > button:focus, .stDownloadButton > button:focus {
+    outline: 2px solid #0071e3 !important;
+}
+
+/* Inputs (Search Pill styling for Selectboxes/Sliders) */
+.stSelectbox div[data-baseweb="select"], .stNumberInput input {
+    border-radius: 9999px !important;
+    background-color: #ffffff !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Dataframe clean up */
+[data-testid="stDataFrame"] {
+    border: 1px solid #e0e0e0 !important;
+    border-radius: 11px !important;
+}

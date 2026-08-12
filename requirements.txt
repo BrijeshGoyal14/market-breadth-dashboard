@@ -2,7 +2,7 @@ streamlit
 pandas
 pyotp
 requests
-yfinance
+yfinance>=0.2.40
 smartapi-python
 python-dotenv
 logzero
