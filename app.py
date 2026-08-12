@@ -163,7 +163,7 @@ STOCKS = {
     "AUROPHARMA-EQ": "Healthcare", "ZYDUSLIFE-EQ": "Healthcare", "BIOCON-EQ": "Healthcare",
     "MAXHEALTH-EQ": "Healthcare", "SYNGENE-EQ": "Healthcare", "LALPATHLAB-EQ": "Healthcare",
     "GLENMARK-EQ": "Healthcare", "IPCALAB-EQ": "Healthcare", "ALKEM-EQ": "Healthcare",
-    "ITC-EQ": "FMCG", "HUL-EQ": "FMCG", "NESTLEIND-EQ": "FMCG", "BRITANNIA-EQ": "FMCG",
+    "ITC-EQ": "FMCG", "HINDUNILVR-EQ": "FMCG", "NESTLEIND-EQ": "FMCG", "BRITANNIA-EQ": "FMCG",
     "TATACONSUM-EQ": "FMCG", "GODREJCP-EQ": "FMCG", "DABUR-EQ": "FMCG", "MARICO-EQ": "FMCG",
     "COLPAL-EQ": "FMCG", "VBL-EQ": "FMCG", "UBL-EQ": "FMCG", "MCDOWELL-N-EQ": "FMCG",
     "EMAMILTD-EQ": "FMCG", "RADICO-EQ": "FMCG", "PGHH-EQ": "FMCG",
@@ -199,7 +199,7 @@ STOCKS = {
     "IRCTC-EQ": "Consumer Retail", "PAGEIND-EQ": "Consumer Retail", "BATAINDIA-EQ": "Consumer Retail",
     "DEVYANI-EQ": "Consumer Retail", "WESTLIFE-EQ": "Consumer Retail", "RELAXO-EQ": "Consumer Retail",
     "METROBRAND-EQ": "Consumer Retail", "KALYANKJIL-EQ": "Consumer Retail", "SAPPHIRE-EQ": "Consumer Retail",
-    "DLF-EQ": "Real Estate", "MACROTECH-EQ": "Real Estate", "GODREJPROP-EQ": "Real Estate",
+    "DLF-EQ": "Real Estate", "LODHA-EQ": "Real Estate", "GODREJPROP-EQ": "Real Estate",
     "OBEROIRLTY-EQ": "Real Estate", "PRESTIGE-EQ": "Real Estate", "PHOENIXLTD-EQ": "Real Estate",
     "BRIGADE-EQ": "Real Estate", "SOBHA-EQ": "Real Estate", "MAHLIFE-EQ": "Real Estate",
     "PURVA-EQ": "Real Estate", "SUNTECK-EQ": "Real Estate",
@@ -370,8 +370,8 @@ def fetch_and_run_vcp(vcp_stocks_list):
 
     vcp_results = []
     
-    # 2. Process stocks in batches of 150 to prevent Yahoo Finance request timeouts
-    chunk_size = 150
+    # 2. Process stocks in safer batches of 100 
+    chunk_size = 100
     for i in range(0, len(vcp_stocks_list), chunk_size):
         chunk = vcp_stocks_list[i:i + chunk_size]
         
@@ -380,18 +380,25 @@ def fetch_and_run_vcp(vcp_stocks_list):
             if vcp_data.empty:
                 continue
 
-            close_col = "Adj Close" if "Adj Close" in vcp_data else "Close"
+            # Safely handle Yahoo's shifting MultiIndex formatting
+            is_multi = isinstance(vcp_data.columns, pd.MultiIndex)
+            close_col = "Adj Close" if ("Adj Close" in vcp_data.columns.get_level_values(0) if is_multi else "Adj Close" in vcp_data) else "Close"
             
             for yf_symbol in chunk:
                 try:
-                    # Check if stock exists in fetched chunk
-                    if close_col in vcp_data and yf_symbol in vcp_data[close_col]:
+                    if is_multi:
+                        if yf_symbol not in vcp_data[close_col]:
+                            continue
                         close_series = vcp_data[close_col][yf_symbol]
                         volume_series = vcp_data["Volume"][yf_symbol] if "Volume" in vcp_data else close_series
                         high_series = vcp_data["High"][yf_symbol] if "High" in vcp_data else close_series
                         low_series = vcp_data["Low"][yf_symbol] if "Low" in vcp_data else close_series
                     else:
-                        continue
+                        # Fallback for single-ticker chunks
+                        close_series = vcp_data[close_col]
+                        volume_series = vcp_data.get("Volume", close_series)
+                        high_series = vcp_data.get("High", close_series)
+                        low_series = vcp_data.get("Low", close_series)
 
                     df = pd.DataFrame({
                         "close": close_series,
@@ -444,8 +451,13 @@ if selected_tab == "📊 Market Breadth":
     st.title("Indian Market Sector Dashboard")
     st.markdown("Advanced breadth tracking with dynamic Relative Strength and volume profiling.")
 
-    with st.spinner("Fetching live market data..."):
-        master_df = fetch_and_calculate()
+    # --- SESSION STATE IMPLEMENTATION ---
+    if "market_data" not in st.session_state:
+        with st.spinner("Fetching live market data (this may take a minute)..."):
+            st.session_state.market_data = fetch_and_calculate()
+            
+    # Safely load the data from memory so sliders update instantly
+    master_df = st.session_state.market_data.copy() if not st.session_state.market_data.empty else pd.DataFrame()
 
     if not master_df.empty:
         rs_col = {"21 Days": "RS_21", "55 Days": "RS_55", "100 Days": "RS_100"}[rs_period]
@@ -502,13 +514,16 @@ if selected_tab == "📊 Market Breadth":
 
         st.subheader(f"Sector Rotation ({display_mode})")
         fig = px.bar(final_chart_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.subheader("Market Breadth Data")
         st.dataframe(final_table_df, width="stretch", hide_index=True)
         
+        # --- EXPLICIT REFRESH BUTTON ---
         if st.button("Refresh Live Data"):
             fetch_and_calculate.clear()
+            if "market_data" in st.session_state:
+                del st.session_state.market_data
             st.rerun()
 
         st.markdown("---")
@@ -591,16 +606,24 @@ elif selected_tab == "🚀 VCP Screener":
         </p>
     """, unsafe_allow_html=True)
 
+    # --- EXPLICIT REFRESH BUTTON ---
     if st.button("🔄 Refresh VCP Scan Data"):
         fetch_and_run_vcp.clear()
+        if "vcp_results" in st.session_state:
+            del st.session_state.vcp_results
         st.rerun()
 
     st.sidebar.markdown("### VCP Parameters")
     min_vcp_score = st.sidebar.slider("Minimum VCP Score", min_value=50, max_value=90, value=60, step=5)
     max_tightness = st.sidebar.slider("Max Pivot Tightness (%)", min_value=2.0, max_value=10.0, value=6.0, step=0.5)
 
-    with st.spinner(f"Analyzing universe of {len(VCP_STOCKS)} stocks for Stage 2 VCP setups (using cached scan)..."):
-        raw_results = fetch_and_run_vcp(VCP_STOCKS)
+    # --- SESSION STATE IMPLEMENTATION ---
+    if "vcp_results" not in st.session_state:
+        with st.spinner(f"Analyzing universe of {len(VCP_STOCKS)} stocks for Stage 2 VCP setups..."):
+            st.session_state.vcp_results = fetch_and_run_vcp(VCP_STOCKS)
+            
+    # Safely load the data from memory so sliders update instantly
+    raw_results = st.session_state.vcp_results
 
     if not raw_results:
         st.warning("No data returned or calculation pending. Click 'Refresh VCP Scan Data' to run the scan. (Note: Also check your CSV ticker symbols are standard NSE tickers).")
