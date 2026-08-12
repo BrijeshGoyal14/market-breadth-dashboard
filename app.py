@@ -289,7 +289,8 @@ def fetch_and_calculate():
             continue
 
         try:
-            time.sleep(0.4) 
+            # Safer sleep delay to avoid triggering Angel One's anti-bot system
+            time.sleep(0.6) 
             candle_params = {
                 "exchange": "NSE",
                 "symboltoken": token,
@@ -298,8 +299,13 @@ def fetch_and_calculate():
                 "todate": to_date
             }
             res = smartApi.getCandleData(candle_params)
-            if not res.get("status") or not res.get("data"):
-                continue
+            
+            # Retry Logic: If Angel One throttles us, pause for 2 seconds and retry
+            if not res or not res.get("status"):
+                time.sleep(2.0)
+                res = smartApi.getCandleData(candle_params)
+                if not res or not res.get("status") or not res.get("data"):
+                    continue
 
             df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
             df['time'] = pd.to_datetime(df['time'])
@@ -514,10 +520,10 @@ if selected_tab == "📊 Market Breadth":
 
         st.subheader(f"Sector Rotation ({display_mode})")
         fig = px.bar(final_chart_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("Market Breadth Data")
-        st.dataframe(final_table_df, width="stretch", hide_index=True)
+        st.dataframe(final_table_df, use_container_width=True, hide_index=True)
         
         # --- EXPLICIT REFRESH BUTTON ---
         if st.button("Refresh Live Data"):
