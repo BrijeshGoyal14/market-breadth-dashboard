@@ -8,7 +8,7 @@ import concurrent.futures
 import plotly.express as px
 import numpy as np
 from SmartApi import SmartConnect
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 
@@ -238,7 +238,32 @@ def get_token_map():
     url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     try:
         response = requests.get(url).json()
-        token_map = {item["symbol"]: item["token"] for item in response if item.get("exch_seg") == "NSE" and item.get("symbol") in STOCKS}
+        
+        # Build dictionary of all NSE equity symbols -> tokens in Angel One
+        angel_nse_map = {}
+        for item in response:
+            if item.get("exch_seg") == "NSE":
+                sym = item.get("symbol", "")
+                token = item.get("token", "")
+                angel_nse_map[sym] = token
+
+        # Aliases for stocks where Angel One symbol and standard symbol might differ
+        aliases = {
+            "HINDUNILVR-EQ": ["HINDUNILVR-EQ", "HUL-EQ"],
+            "LODHA-EQ": ["LODHA-EQ", "MACROTECH-EQ"],
+            "MCDOWELL-N-EQ": ["MCDOWELL-N-EQ", "UNITDSPR-EQ"],
+        }
+        
+        token_map = {}
+        for stock_key in STOCKS.keys():
+            if stock_key in angel_nse_map:
+                token_map[stock_key] = angel_nse_map[stock_key]
+            elif stock_key in aliases:
+                for alt_sym in aliases[stock_key]:
+                    if alt_sym in angel_nse_map:
+                        token_map[stock_key] = angel_nse_map[alt_sym]
+                        break
+
         token_map["NIFTY"] = "99926000"
         return token_map
     except Exception:
@@ -262,8 +287,10 @@ def fetch_and_calculate():
     token_map = get_token_map()
     mcaps = get_market_caps()
     
-    to_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-    from_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d %H:%M")
+    # Force Indian Standard Time (UTC + 5:30) for cloud servers
+    ist_offset = timezone(timedelta(hours=5, minutes=30))
+    to_date = datetime.now(ist_offset).strftime("%Y-%m-%d %H:%M")
+    from_date = (datetime.now(ist_offset) - timedelta(days=365)).strftime("%Y-%m-%d %H:%M")
 
     nifty_params = {
         "exchange": "NSE",
@@ -289,7 +316,6 @@ def fetch_and_calculate():
             continue
 
         try:
-            # Safer sleep delay to avoid triggering Angel One's anti-bot system
             time.sleep(0.6) 
             candle_params = {
                 "exchange": "NSE",
@@ -300,7 +326,7 @@ def fetch_and_calculate():
             }
             res = smartApi.getCandleData(candle_params)
             
-            # Retry Logic: If Angel One throttles us, pause for 2 seconds and retry
+            # Retry Logic: If Angel One throttles, pause for 2s and retry
             if not res or not res.get("status"):
                 time.sleep(2.0)
                 res = smartApi.getCandleData(candle_params)
@@ -400,7 +426,6 @@ def fetch_and_run_vcp(vcp_stocks_list):
                         high_series = vcp_data["High"][yf_symbol] if "High" in vcp_data else close_series
                         low_series = vcp_data["Low"][yf_symbol] if "Low" in vcp_data else close_series
                     else:
-                        # Fallback for single-ticker chunks
                         close_series = vcp_data[close_col]
                         volume_series = vcp_data.get("Volume", close_series)
                         high_series = vcp_data.get("High", close_series)
@@ -426,7 +451,6 @@ def fetch_and_run_vcp(vcp_stocks_list):
             continue
 
     return vcp_results
-
 
 # ==========================================
 # 6. UI RENDERING & NAVIGATION
@@ -462,7 +486,6 @@ if selected_tab == "📊 Market Breadth":
         with st.spinner("Fetching live market data (this may take a minute)..."):
             st.session_state.market_data = fetch_and_calculate()
             
-    # Safely load the data from memory so sliders update instantly
     master_df = st.session_state.market_data.copy() if not st.session_state.market_data.empty else pd.DataFrame()
 
     if not master_df.empty:
@@ -528,6 +551,7 @@ if selected_tab == "📊 Market Breadth":
         # --- EXPLICIT REFRESH BUTTON ---
         if st.button("Refresh Live Data"):
             fetch_and_calculate.clear()
+            get_token_map.clear()
             if "market_data" in st.session_state:
                 del st.session_state.market_data
             st.rerun()
@@ -628,7 +652,6 @@ elif selected_tab == "🚀 VCP Screener":
         with st.spinner(f"Analyzing universe of {len(VCP_STOCKS)} stocks for Stage 2 VCP setups..."):
             st.session_state.vcp_results = fetch_and_run_vcp(VCP_STOCKS)
             
-    # Safely load the data from memory so sliders update instantly
     raw_results = st.session_state.vcp_results
 
     if not raw_results:
