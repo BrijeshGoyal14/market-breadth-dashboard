@@ -237,9 +237,13 @@ def get_market_caps():
 def get_token_map():
     url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     try:
-        response = requests.get(url).json()
+        res = requests.get(url, timeout=15)
+        if res.status_code != 200:
+            st.error(f"⚠️ Angel One Master List Blocked: HTTP {res.status_code}")
+            return {}
         
-        # Build dictionary of all NSE equity symbols -> tokens in Angel One
+        response = res.json()
+        
         angel_nse_map = {}
         for item in response:
             if item.get("exch_seg") == "NSE":
@@ -247,7 +251,6 @@ def get_token_map():
                 token = item.get("token", "")
                 angel_nse_map[sym] = token
 
-        # Aliases for stocks where Angel One symbol and standard symbol might differ
         aliases = {
             "HINDUNILVR-EQ": ["HINDUNILVR-EQ", "HUL-EQ"],
             "LODHA-EQ": ["LODHA-EQ", "MACROTECH-EQ"],
@@ -266,15 +269,21 @@ def get_token_map():
 
         token_map["NIFTY"] = "99926000"
         return token_map
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ Failed to download Angel One token list. Server IP may be blocked. Error: {e}")
         return {}
 
 def get_smart_api_session():
     smartApi = SmartConnect(api_key=API_KEY)
+    
+    if not TOTP_SECRET:
+        st.error("⚠️ Missing Credentials: TOTP_SECRET is not loaded in the environment.")
+        return None
+        
     totp = pyotp.TOTP(TOTP_SECRET).now()
     session = smartApi.generateSession(CLIENT_ID, PIN, totp)
     if session.get('status') == False:
-        st.error(f"Login Failed: {session.get('message')}")
+        st.error(f"⚠️ Login Failed: {session.get('message')}")
         return None
     return smartApi
 
@@ -285,9 +294,12 @@ def fetch_and_calculate():
         return pd.DataFrame()
 
     token_map = get_token_map()
+    if not token_map:
+        return pd.DataFrame()
+
     mcaps = get_market_caps()
     
-    # Force Indian Standard Time (UTC + 5:30) for cloud servers
+    # Force Indian Standard Time (UTC + 5:30)
     ist_offset = timezone(timedelta(hours=5, minutes=30))
     to_date = datetime.now(ist_offset).strftime("%Y-%m-%d %H:%M")
     from_date = (datetime.now(ist_offset) - timedelta(days=365)).strftime("%Y-%m-%d %H:%M")
@@ -300,7 +312,14 @@ def fetch_and_calculate():
         "todate": to_date
     }
     nifty_response = smartApi.getCandleData(nifty_params)
-    if not nifty_response.get("status") or not nifty_response.get("data"):
+    
+    if not nifty_response or not nifty_response.get("status"):
+        error_msg = nifty_response.get('message', 'No response') if nifty_response else 'Empty response'
+        st.error(f"⚠️ Angel One Data Blocked (Nifty Fetch): {error_msg}")
+        return pd.DataFrame()
+        
+    if not nifty_response.get("data"):
+        st.error("⚠️ Angel One returned a successful status, but the Nifty data array is completely empty.")
         return pd.DataFrame()
 
     nifty_df = pd.DataFrame(nifty_response["data"], columns=["time", "open", "high", "low", "close", "volume"])
@@ -326,7 +345,6 @@ def fetch_and_calculate():
             }
             res = smartApi.getCandleData(candle_params)
             
-            # Retry Logic: If Angel One throttles, pause for 2s and retry
             if not res or not res.get("status"):
                 time.sleep(2.0)
                 res = smartApi.getCandleData(candle_params)
@@ -388,31 +406,34 @@ def fetch_and_calculate():
 @st.cache_data(ttl=86400)
 def fetch_and_run_vcp(vcp_stocks_list):
     if not vcp_stocks_list:
-        return []
+        return {"error": "CSV list is empty or VCP_Stocks_Yahoo.csv is missing."}
 
-    # 1. First fetch Nifty 50 close index as benchmark
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
+
     try:
-        nifty_data = yf.download("^NSEI", period="1y", interval="1d", progress=False)
+        nifty_data = yf.download("^NSEI", period="1y", interval="1d", progress=False, session=session)
+        if nifty_data.empty:
+            return {"error": "Yahoo Finance blocked the Nifty 50 download. Cloud IP may be rate-limited."}
+            
         nifty_col = "Adj Close" if "Adj Close" in nifty_data else "Close"
         nifty_close = nifty_data[nifty_col].ffill()
         if isinstance(nifty_close, pd.DataFrame):
             nifty_close = nifty_close.iloc[:, 0]
-    except Exception:
-        nifty_close = pd.Series(1.0)
+    except Exception as e:
+        return {"error": f"Nifty fetch crashed: {e}"}
 
     vcp_results = []
     
-    # 2. Process stocks in safer batches of 100 
-    chunk_size = 100
+    chunk_size = 50
     for i in range(0, len(vcp_stocks_list), chunk_size):
         chunk = vcp_stocks_list[i:i + chunk_size]
         
         try:
-            vcp_data = yf.download(chunk, period="1y", interval="1d", threads=True, progress=False)
+            vcp_data = yf.download(chunk, period="1y", interval="1d", threads=False, progress=False, session=session)
             if vcp_data.empty:
                 continue
 
-            # Safely handle Yahoo's shifting MultiIndex formatting
             is_multi = isinstance(vcp_data.columns, pd.MultiIndex)
             close_col = "Adj Close" if ("Adj Close" in vcp_data.columns.get_level_values(0) if is_multi else "Adj Close" in vcp_data) else "Close"
             
@@ -449,8 +470,10 @@ def fetch_and_run_vcp(vcp_stocks_list):
                     continue
         except Exception:
             continue
+            
+        time.sleep(0.5)
 
-    return vcp_results
+    return {"data": vcp_results}
 
 # ==========================================
 # 6. UI RENDERING & NAVIGATION
@@ -481,7 +504,6 @@ if selected_tab == "📊 Market Breadth":
     st.title("Indian Market Sector Dashboard")
     st.markdown("Advanced breadth tracking with dynamic Relative Strength and volume profiling.")
 
-    # --- SESSION STATE IMPLEMENTATION ---
     if "market_data" not in st.session_state:
         with st.spinner("Fetching live market data (this may take a minute)..."):
             st.session_state.market_data = fetch_and_calculate()
@@ -543,12 +565,11 @@ if selected_tab == "📊 Market Breadth":
 
         st.subheader(f"Sector Rotation ({display_mode})")
         fig = px.bar(final_chart_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.subheader("Market Breadth Data")
-        st.dataframe(final_table_df, use_container_width=True, hide_index=True)
+        st.dataframe(final_table_df, width="stretch", hide_index=True)
         
-        # --- EXPLICIT REFRESH BUTTON ---
         if st.button("Refresh Live Data"):
             fetch_and_calculate.clear()
             get_token_map.clear()
@@ -619,8 +640,6 @@ RSI: {stock['RSI_14']:.1f} &nbsp;|&nbsp; RS: {stock[rs_col]*100:.1f}%
                     )
         else:
             st.write("No stocks meet this criteria right now.")
-    else:
-        st.error("Failed to load dashboard data.")
 
 # ==========================================
 # TAB 2: VCP SCREENER
@@ -636,7 +655,6 @@ elif selected_tab == "🚀 VCP Screener":
         </p>
     """, unsafe_allow_html=True)
 
-    # --- EXPLICIT REFRESH BUTTON ---
     if st.button("🔄 Refresh VCP Scan Data"):
         fetch_and_run_vcp.clear()
         if "vcp_results" in st.session_state:
@@ -647,53 +665,57 @@ elif selected_tab == "🚀 VCP Screener":
     min_vcp_score = st.sidebar.slider("Minimum VCP Score", min_value=50, max_value=90, value=60, step=5)
     max_tightness = st.sidebar.slider("Max Pivot Tightness (%)", min_value=2.0, max_value=10.0, value=6.0, step=0.5)
 
-    # --- SESSION STATE IMPLEMENTATION ---
     if "vcp_results" not in st.session_state:
         with st.spinner(f"Analyzing universe of {len(VCP_STOCKS)} stocks for Stage 2 VCP setups..."):
             st.session_state.vcp_results = fetch_and_run_vcp(VCP_STOCKS)
             
     raw_results = st.session_state.vcp_results
 
-    if not raw_results:
-        st.warning("No data returned or calculation pending. Click 'Refresh VCP Scan Data' to run the scan. (Note: Also check your CSV ticker symbols are standard NSE tickers).")
+    if isinstance(raw_results, dict) and "error" in raw_results:
+        st.error(f"⚠️ {raw_results['error']}")
     else:
-        filtered_results = [
-            r for r in raw_results 
-            if r["VCPScore"] >= min_vcp_score and r["PivotTightnessPct"] <= max_tightness
-        ]
-
-        if not filtered_results:
-            st.warning(f"No stocks currently meet a VCP Score ≥ {min_vcp_score} and Tightness ≤ {max_tightness}%.")
+        actual_data = raw_results.get("data", []) if isinstance(raw_results, dict) else raw_results
+        
+        if not actual_data:
+            st.warning("No data returned or calculation pending. Click 'Refresh VCP Scan Data' to run the scan. (Note: Also check your CSV ticker symbols are standard NSE tickers).")
         else:
-            vcp_df = pd.DataFrame(filtered_results).sort_values(by="VCPScore", ascending=False)
-            
-            st.markdown(f"**Found {len(vcp_df)} Institutional VCP Setups out of {len(VCP_STOCKS)} stocks**")
-            
-            cols = st.columns(3)
-            for idx, row in vcp_df.reset_index(drop=True).iterrows():
-                col = cols[idx % 3]
-                
-                vdu_badge = '<span style="background-color: #0066cc; color: white; font-size: 11px; padding: 3px 8px; border-radius: 9999px; font-weight: 600;">VDU ACTIVE</span>' if row['IsVDU'] else ''
-                
-                with col:
-                    st.markdown(
-                        f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">
-<div style="display: flex; justify-content: space-between; align-items: center;">
-    <span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row['Ticker']}</span>
-    {vdu_badge}
-</div>
+            filtered_results = [
+                r for r in actual_data 
+                if r["VCPScore"] >= min_vcp_score and r["PivotTightnessPct"] <= max_tightness
+            ]
 
-<div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">
-    ₹{row['LatestPrice']:.2f}
-</div>
+            if not filtered_results:
+                st.warning(f"No stocks currently meet a VCP Score ≥ {min_vcp_score} and Tightness ≤ {max_tightness}%.")
+            else:
+                vcp_df = pd.DataFrame(filtered_results).sort_values(by="VCPScore", ascending=False)
+                
+                st.markdown(f"**Found {len(vcp_df)} Institutional VCP Setups out of {len(VCP_STOCKS)} stocks**")
+                
+                cols = st.columns(3)
+                for idx, row in vcp_df.reset_index(drop=True).iterrows():
+                    col = cols[idx % 3]
+                    
+                    vdu_badge = '<span style="background-color: #0066cc; color: white; font-size: 11px; padding: 3px 8px; border-radius: 9999px; font-weight: 600;">VDU ACTIVE</span>' if row['IsVDU'] else ''
+                    
+                    with col:
+                        st.markdown(
+                            f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row['Ticker']}</span>
+        {vdu_badge}
+    </div>
 
-<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">
-    <b>VCP Rating Score:</b> <span style="color: #0066cc; font-weight: 600;">{row['VCPScore']}/100</span><br>
-    <b>Pivot Tightness:</b> {row['PivotTightnessPct']:.1f}% (10-Day Range)<br>
-    <b>Base Depth:</b> {row['BaseDepthPct']:.1f}%<br>
-    <b>Dist. from 52W High:</b> {row['DistFrom52wHigh']:.1f}%<br>
-    <b>55D Rel. Strength:</b> +{row['RS55']:.1f}%
-</div>
-</div>""",
-                        unsafe_allow_html=True
-                    )
+    <div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">
+        ₹{row['LatestPrice']:.2f}
+    </div>
+
+    <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">
+        <b>VCP Rating Score:</b> <span style="color: #0066cc; font-weight: 600;">{row['VCPScore']}/100</span><br>
+        <b>Pivot Tightness:</b> {row['PivotTightnessPct']:.1f}% (10-Day Range)<br>
+        <b>Base Depth:</b> {row['BaseDepthPct']:.1f}%<br>
+        <b>Dist. from 52W High:</b> {row['DistFrom52wHigh']:.1f}%<br>
+        <b>55D Rel. Strength:</b> +{row['RS55']:.1f}%
+    </div>
+    </div>""",
+                            unsafe_allow_html=True
+                        )
