@@ -624,20 +624,25 @@ if selected_tab == "📊 Market Breadth":
                 surge_text = " | <strong>Volume Breakout</strong>" if stock["VolumeSurge"] == 1 else ""
                 
                 with col:
-                    st.markdown(
-                        f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 16px;">
-<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 17px; color: #1d1d1f;">{stock['Ticker']}</span>
-<span style="color: #0066cc; font-size: 14px; font-weight: 400;">{surge_text}</span><br>
-<div style="margin-top: 12px; font-size: 17px; color: #1d1d1f; font-weight: 400; line-height: 1.47;">
-₹{stock['CurrentPrice']:.2f} <br>
-<span style="color: {color}; font-weight: 600;">{sign}₹{stock['ChangeRs']:.2f} ({sign}{stock['ChangePct']:.2f}%)</span><br>
+                        st.markdown(
+                            f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row['Ticker']}</span>
+{vdu_badge}
 </div>
-<div style="margin-top: 17px; font-size: 14px; color: #7a7a7a; font-weight: 400;">
-RSI: {stock['RSI_14']:.1f} &nbsp;|&nbsp; RS: {stock[rs_col]*100:.1f}%
+<div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">
+₹{row['LatestPrice']:.2f}
 </div>
-</div>""", 
-                        unsafe_allow_html=True
-                    )
+<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">
+<b>VCP Rating Score:</b> <span style="color: #0066cc; font-weight: 600;">{row['VCPScore']}/100</span><br>
+<b>Pivot Tightness:</b> {row['PivotTightnessPct']:.1f}% (10-Day Range)<br>
+<b>Base Depth:</b> {row['BaseDepthPct']:.1f}%<br>
+<b>Dist. from 52W High:</b> {row['DistFrom52wHigh']:.1f}%<br>
+<b>55D Rel. Strength:</b> +{row['RS55']:.1f}%
+</div>
+</div>""",
+                            unsafe_allow_html=True
+                        )
         else:
             st.write("No stocks meet this criteria right now.")
 
