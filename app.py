@@ -94,6 +94,34 @@ def analyze_vcp(df, nifty_close):
         "ATRRatio": atr_ratio, "RS55": rs_55 * 100, "VCPScore": max(0, vcp_score)
     }
 
+def analyze_pocket_pivot(df):
+    if len(df) < 15: return False
+    
+    latest_close = df["close"].iloc[-1]
+    prev_close = df["close"].iloc[-2]
+    if latest_close <= prev_close:
+        return False
+        
+    latest_volume = df["volume"].iloc[-1]
+    
+    max_down_volume = 0
+    for i in range(-11, -1):
+        day_close = df["close"].iloc[i]
+        day_prev = df["close"].iloc[i-1]
+        day_vol = df["volume"].iloc[i]
+        
+        if day_close < day_prev:
+            if day_vol > max_down_volume:
+                max_down_volume = day_vol
+                
+    sma_50 = df["close"].rolling(50).mean().iloc[-1]
+    is_above_sma = latest_close > sma_50 if pd.notna(sma_50) else True
+    
+    if latest_volume > max_down_volume and is_above_sma:
+        return True
+        
+    return False
+
 STOCKS = {
     "HDFCBANK-EQ": "Financials", "ICICIBANK-EQ": "Financials", "SBIN-EQ": "Financials",
     "AXISBANK-EQ": "Financials", "KOTAKBANK-EQ": "Financials", "BAJFINANCE-EQ": "Financials",
@@ -109,7 +137,7 @@ STOCKS = {
     "RELIANCE-EQ": "Oil & Gas", "ONGC-EQ": "Oil & Gas", "COALINDIA-EQ": "Oil & Gas",
     "BPCL-EQ": "Oil & Gas", "IOC-EQ": "Oil & Gas", "HINDPETRO-EQ": "Oil & Gas",
     "GAIL-EQ": "Oil & Gas", "IGL-EQ": "Oil & Gas", "MGL-EQ": "Oil & Gas",
-    "PETRONET-EQ": "Oil & Gas", "GUJARATGAS-EQ": "Oil & Gas", "OIL-EQ": "Oil & Gas",
+    "PETRONET-EQ": "Oil & Gas", "GUJENERGY-EQ": "Oil & Gas", "OIL-EQ": "Oil & Gas",
     "CASTROLIND-EQ": "Oil & Gas", "AEGISCHEM-EQ": "Oil & Gas",
     "BAJAJ-AUTO-EQ": "Automobile", "M&M-EQ": "Automobile", "MARUTI-EQ": "Automobile",
     "HEROMOTOCO-EQ": "Automobile", "EICHERMOT-EQ": "Automobile", "TVSMOTOR-EQ": "Automobile", 
@@ -164,7 +192,8 @@ STOCKS = {
     "LT-EQ": "Infrastructure", "GMRINFRA-EQ": "Infrastructure", "IRB-EQ": "Infrastructure",
     "RVNL-EQ": "Infrastructure", "IRCON-EQ": "Infrastructure", "KEC-EQ": "Infrastructure",
     "NBCC-EQ": "Infrastructure", "NCC-EQ": "Infrastructure", "RITES-EQ": "Infrastructure",
-    "ENGINERSIN-EQ": "Infrastructure", "PNCINFRA-EQ": "Infrastructure", "GRINFRA-EQ": "Infrastructure"
+    "ENGINERSIN-EQ": "Infrastructure", "PNCINFRA-EQ": "Infrastructure", "GRINFRA-EQ": "Infrastructure",
+    "GUJENERGY-EQ": "Oil & Gas"
 }
 
 VCP_STOCKS = get_vcp_stocks()
@@ -200,7 +229,8 @@ def get_token_map():
             "MCDOWELL-N-EQ": ["MCDOWELL-N-EQ", "UNITDSPR-EQ"],
             "NYKAA-EQ": ["NYKAA-EQ", "FSN-EQ"],
             "ZYDUSLIFE-EQ": ["ZYDUSLIFE-EQ", "CADILAHC-EQ"],
-            "GUJARATGAS-EQ": ["GUJARATGAS-EQ", "GUJGAS-EQ", "GUJGAS", "GUJENERGY-EQ"],
+            "LTIMINDTREE-EQ": ["LTIM-EQ", "LTIM"],
+            "GUJENERGY-EQ": ["GUJGASLTD-EQ", "GUJARATGAS-EQ", "GUJGAS-EQ", "GUJGASLTD"],
             "AEGISCHEM-EQ": ["AEGISLOG-EQ", "AEGISCHEM"],
             "ZOMATO-EQ": ["ETERNAL-EQ", "ETERNAL"],
             "GMRINFRA-EQ": ["GMRAIRPORT-EQ", "GMRINFRA"]
@@ -337,10 +367,8 @@ def fetch_and_run_vcp(vcp_stocks_list):
         return {"error": f"Nifty fetch crashed: {e}"}
 
     vcp_results = []
-    
     progress_bar = st.progress(0, text="Starting VCP Scan...")
     
-    # Process in chunks of 100 to maximize multithreading speed
     chunk_size = 100
     total_chunks = (len(vcp_stocks_list) // chunk_size) + 1
     
@@ -350,7 +378,6 @@ def fetch_and_run_vcp(vcp_stocks_list):
         
         chunk = vcp_stocks_list[i:i + chunk_size]
         try:
-            # Re-enabled threads=True for lightning fast batch downloads
             vcp_data = yf.download(chunk, period="1y", interval="1d", threads=True, progress=False, session=session)
             if vcp_data.empty: continue
 
@@ -374,16 +401,71 @@ def fetch_and_run_vcp(vcp_stocks_list):
                         vcp_results.append(res)
                 except: continue
         except: continue
-        time.sleep(0.1) # Small breather between multithreaded batches
+        time.sleep(0.1)
         
     progress_bar.empty()
     return {"data": vcp_results}
+
+@st.cache_data(ttl=86400)
+def fetch_and_run_pocket_pivots(vcp_stocks_list):
+    if not vcp_stocks_list: return []
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
+
+    pp_results = []
+    progress_bar = st.progress(0, text="Starting Pocket Pivot Scan...")
+    
+    chunk_size = 100
+    total_chunks = (len(vcp_stocks_list) // chunk_size) + 1
+    
+    for i in range(0, len(vcp_stocks_list), chunk_size):
+        chunk_num = (i // chunk_size) + 1
+        progress_bar.progress(chunk_num / total_chunks, text=f"Pocket Pivot Scan: Processing batch {chunk_num}/{total_chunks}...")
+        
+        chunk = vcp_stocks_list[i:i + chunk_size]
+        try:
+            data = yf.download(chunk, period="6mo", interval="1d", threads=True, progress=False, session=session)
+            if data.empty: continue
+
+            is_multi = isinstance(data.columns, pd.MultiIndex)
+            close_col = "Adj Close" if ("Adj Close" in data.columns.get_level_values(0) if is_multi else "Adj Close" in data) else "Close"
+            
+            for sym in chunk:
+                try:
+                    if is_multi:
+                        if sym not in data[close_col]: continue
+                        c_s, v_s = data[close_col][sym], data["Volume"][sym] if "Volume" in data else data[close_col][sym]
+                    else:
+                        c_s, v_s = data[close_col], data.get("Volume", data[close_col])
+
+                    df = pd.DataFrame({"close": c_s, "volume": v_s}).dropna()
+                    if analyze_pocket_pivot(df):
+                        latest_price = df["close"].iloc[-1]
+                        prev_close = df["close"].iloc[-2]
+                        change_pct = ((latest_price - prev_close) / prev_close) * 100
+                        avg_vol = df["volume"].rolling(20).mean().iloc[-1]
+                        
+                        pp_results.append({
+                            "Ticker": sym.replace(".NS", "").replace(".BO", ""),
+                            "Sector": "VCP Universe",
+                            "LatestPrice": latest_price,
+                            "ChangePct": change_pct,
+                            "Volume": df["volume"].iloc[-1],
+                            "AvgVolume": avg_vol if pd.notna(avg_vol) else 1
+                        })
+                except: continue
+        except: continue
+        time.sleep(0.1)
+        
+    progress_bar.empty()
+    return pp_results
 
 st.markdown("<br>", unsafe_allow_html=True)
 _, col2, _ = st.columns([1, 2, 1])
 
 with col2:
-    selected_tab = st.radio("Navigation", ["📊 Market Breadth", "🚀 VCP Screener"], horizontal=True, label_visibility="collapsed")
+    selected_tab = st.radio("Navigation", ["📊 Market Breadth", "🚀 VCP Screener", "🎯 Pocket Pivot Tracker"], horizontal=True, label_visibility="collapsed")
 st.divider()
 
 if selected_tab == "📊 Market Breadth":
@@ -526,3 +608,36 @@ elif selected_tab == "🚀 VCP Screener":
                             f'<b>55D Rel. Strength:</b> +{row["RS55"]:.1f}%</div></div>'
                         )
                         st.markdown(html_card, unsafe_allow_html=True)
+
+elif selected_tab == "🎯 Pocket Pivot Tracker":
+    st.markdown("<h2 style='font-family: -apple-system, sans-serif; font-weight: 600; color: #1d1d1f; letter-spacing: -0.374px;'>Institutional Pocket Pivot Tracker</h2><p style='font-size: 17px; color: #7a7a7a; margin-bottom: 24px;'>Identifies quiet institutional accumulation days across your VCP stock universe.</p>", unsafe_allow_html=True)
+
+    if st.button("🔄 Refresh Pocket Pivot Scan"):
+        fetch_and_run_pocket_pivots.clear()
+        st.session_state.pop("pocket_pivot_results", None)
+        st.rerun()
+
+    if "pocket_pivot_results" not in st.session_state:
+        with st.spinner(f"Scanning universe of {len(VCP_STOCKS)} stocks via Yahoo Finance..."):
+            st.session_state.pocket_pivot_results = fetch_and_run_pocket_pivots(VCP_STOCKS)
+
+    pp_data = st.session_state.pocket_pivot_results
+    if not pp_data:
+        st.warning("No Pocket Pivot setups detected in your VCP stock file today.")
+    else:
+        st.markdown(f"**Found {len(pp_data)} Institutional Pocket Pivot Setups**")
+        cols = st.columns(3)
+        for idx, row in enumerate(pp_data):
+            col = cols[idx % 3]
+            with col:
+                html_card = (
+                    f'<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center;">'
+                    f'<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row["Ticker"]}</span>'
+                    f'<span style="background-color: #34c759; color: white; font-size: 11px; padding: 3px 8px; border-radius: 9999px; font-weight: 600;">POCKET PIVOT</span></div>'
+                    f'<div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">₹{row["LatestPrice"]:.2f}</div>'
+                    f'<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">'
+                    f'<b>Day Change:</b> <span style="color: #34c759; font-weight: 600;">+{row["ChangePct"]:.2f}%</span><br>'
+                    f'<b>Volume vs Avg:</b> {(row["Volume"]/row["AvgVolume"]):.1f}x Average</div></div>'
+                )
+                st.markdown(html_card, unsafe_allow_html=True)
