@@ -15,9 +15,6 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# ==========================================
-# 1. API CREDENTIALS & PAGE CONFIG
-# ==========================================
 st.set_page_config(layout="wide", page_title="Indian Sector Dashboard")
 
 API_KEY = os.getenv("API_KEY")
@@ -25,20 +22,15 @@ CLIENT_ID = os.getenv("CLIENT_ID")
 PIN = os.getenv("PIN")
 TOTP_SECRET = os.getenv("TOTP_SECRET")
 
-# ==========================================
-# 2. HELPER FUNCTIONS & STYLING
-# ==========================================
 def load_css(file_name):
     file_path = os.path.join(os.path.dirname(__file__), file_name)
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# Inject Apple Design System
 load_css("design.css")
 
 def get_vcp_stocks(file_name="VCP_Stocks_Yahoo.csv"):
-    """Reads the VCP stocks directly from the uploaded CSV to keep app.py clean."""
     file_path = os.path.join(os.path.dirname(__file__), file_name)
     vcp_list = []
     if os.path.exists(file_path):
@@ -49,68 +41,43 @@ def get_vcp_stocks(file_name="VCP_Stocks_Yahoo.csv"):
                     vcp_list.append(cleaned)
     return vcp_list
 
-# ==========================================
-# 3. CORE ANALYTICAL ENGINES
-# ==========================================
 def analyze_vcp(df, nifty_close):
-    if len(df) < 200:
-        return None
-
-    close = df["close"]
-    volume = df["volume"]
+    if len(df) < 200: return None
+    close, volume = df["close"], df["volume"]
     latest_price = close.iloc[-1]
     
-    sma_50 = close.rolling(50).mean()
-    sma_150 = close.rolling(150).mean()
-    sma_200 = close.rolling(200).mean()
-    
-    c_50 = sma_50.iloc[-1]
-    c_150 = sma_150.iloc[-1]
-    c_200 = sma_200.iloc[-1]
-    c_200_20d_ago = sma_200.iloc[-20]
+    c_50 = close.rolling(50).mean().iloc[-1]
+    c_150 = close.rolling(150).mean().iloc[-1]
+    c_200 = close.rolling(200).mean().iloc[-1]
+    c_200_20d_ago = close.rolling(200).mean().iloc[-20]
     
     high_52w = close.iloc[-252:].max() if len(close) >= 252 else close.max()
     low_52w = close.iloc[-252:].min() if len(close) >= 252 else close.min()
     
-    t1 = latest_price > c_150 and latest_price > c_200
-    t2 = c_150 > c_200
-    t3 = c_200 > c_200_20d_ago
-    t4 = c_50 > c_150 and c_50 > c_200
-    t5 = latest_price > c_50
-    t6 = latest_price >= (1.25 * low_52w)
-    t7 = latest_price >= (0.75 * high_52w)
-    
+    if not (latest_price > c_150 and latest_price > c_200 and c_150 > c_200 and 
+            c_200 > c_200_20d_ago and c_50 > c_150 and c_50 > c_200 and 
+            latest_price > c_50 and latest_price >= (1.25 * low_52w) and 
+            latest_price >= (0.75 * high_52w)):
+        return None
+
     aligned_nifty = nifty_close.reindex(df.index, method="ffill")
     stk_ret = (latest_price - close.iloc[-56]) / close.iloc[-56] if len(close) >= 56 else 0
     nft_ret = (aligned_nifty.iloc[-1] - aligned_nifty.iloc[-56]) / aligned_nifty.iloc[-56] if len(aligned_nifty) >= 56 else 0
     rs_55 = stk_ret - nft_ret
-    t8 = rs_55 > 0
+    if rs_55 <= 0: return None
 
-    if not all([t1, t2, t3, t4, t5, t6, t7, t8]):
-        return None
-
-    base_high = close.iloc[-60:].max()
-    base_low = close.iloc[-60:].min()
+    base_high, base_low = close.iloc[-60:].max(), close.iloc[-60:].min()
+    recent_high, recent_low = close.iloc[-10:].max(), close.iloc[-10:].min()
+    
     base_depth_pct = ((base_high - base_low) / base_high) * 100
-    
-    recent_high = close.iloc[-10:].max()
-    recent_low = close.iloc[-10:].min()
     pivot_tightness_pct = ((recent_high - recent_low) / recent_high) * 100
-    
     contraction_ratio = (recent_high - recent_low) / (base_high - base_low + 1e-5)
     
-    high_prices = df.get("high", close)
-    low_prices = df.get("low", close)
-    tr = np.maximum(high_prices - low_prices, np.abs(high_prices - close.shift(1)))
-    atr_10 = tr.rolling(10).mean().iloc[-1]
-    atr_50 = tr.rolling(50).mean().iloc[-1]
-    atr_ratio = atr_10 / (atr_50 + 1e-5)
+    tr = np.maximum(df.get("high", close) - df.get("low", close), np.abs(df.get("high", close) - close.shift(1)))
+    atr_ratio = tr.rolling(10).mean().iloc[-1] / (tr.rolling(50).mean().iloc[-1] + 1e-5)
 
-    vol_avg_20 = volume.rolling(20).mean().iloc[-1]
-    vol_avg_5 = volume.rolling(5).mean().iloc[-1]
-    vdu_ratio = vol_avg_5 / (vol_avg_20 + 1e-5)
+    vdu_ratio = volume.rolling(5).mean().iloc[-1] / (volume.rolling(20).mean().iloc[-1] + 1e-5)
     is_vdu = vdu_ratio < 0.65  
-
     dist_from_52w_high = ((high_52w - latest_price) / high_52w) * 100
     
     vcp_score = 100
@@ -121,21 +88,12 @@ def analyze_vcp(df, nifty_close):
     if atr_ratio > 0.70: vcp_score -= 20
 
     return {
-        "LatestPrice": latest_price,
-        "DistFrom52wHigh": dist_from_52w_high,
-        "BaseDepthPct": base_depth_pct,
-        "PivotTightnessPct": pivot_tightness_pct,
-        "ContractionRatio": contraction_ratio,
-        "VDURatio": vdu_ratio,
-        "IsVDU": is_vdu,
-        "ATRRatio": atr_ratio,
-        "RS55": rs_55 * 100,
-        "VCPScore": max(0, vcp_score)
+        "LatestPrice": latest_price, "DistFrom52wHigh": dist_from_52w_high,
+        "BaseDepthPct": base_depth_pct, "PivotTightnessPct": pivot_tightness_pct,
+        "ContractionRatio": contraction_ratio, "VDURatio": vdu_ratio, "IsVDU": is_vdu,
+        "ATRRatio": atr_ratio, "RS55": rs_55 * 100, "VCPScore": max(0, vcp_score)
     }
 
-# ==========================================
-# 4. DATA DICTIONARIES
-# ==========================================
 STOCKS = {
     "HDFCBANK-EQ": "Financials", "ICICIBANK-EQ": "Financials", "SBIN-EQ": "Financials",
     "AXISBANK-EQ": "Financials", "KOTAKBANK-EQ": "Financials", "BAJFINANCE-EQ": "Financials",
@@ -145,13 +103,13 @@ STOCKS = {
     "BANKBARODA-EQ": "Financials", "IOB-EQ": "Financials", "UNIONBANK-EQ": "Financials",
     "CANBK-EQ": "Financials", "IDFCFIRSTB-EQ": "Financials", "FEDERALBNK-EQ": "Financials",
     "TCS-EQ": "IT", "INFY-EQ": "IT", "WIPRO-EQ": "IT", "HCLTECH-EQ": "IT", "TECHM-EQ": "IT",
-    "LTIM-EQ": "IT", "PERSISTENT-EQ": "IT", "COFORGE-EQ": "IT", "MPHASIS-EQ": "IT",
+    "PERSISTENT-EQ": "IT", "COFORGE-EQ": "IT", "MPHASIS-EQ": "IT",
     "KPITTECH-EQ": "IT", "TATAELXSI-EQ": "IT", "OFSS-EQ": "IT", "CYIENT-EQ": "IT",
     "BSOFT-EQ": "IT", "SONATSOFTW-EQ": "IT", "INTELLECT-EQ": "IT",
     "RELIANCE-EQ": "Oil & Gas", "ONGC-EQ": "Oil & Gas", "COALINDIA-EQ": "Oil & Gas",
     "BPCL-EQ": "Oil & Gas", "IOC-EQ": "Oil & Gas", "HINDPETRO-EQ": "Oil & Gas",
     "GAIL-EQ": "Oil & Gas", "IGL-EQ": "Oil & Gas", "MGL-EQ": "Oil & Gas",
-    "PETRONET-EQ": "Oil & Gas", "GUJGASLTD-EQ": "Oil & Gas", "OIL-EQ": "Oil & Gas",
+    "PETRONET-EQ": "Oil & Gas", "GUJARATGAS-EQ": "Oil & Gas", "OIL-EQ": "Oil & Gas",
     "CASTROLIND-EQ": "Oil & Gas", "AEGISCHEM-EQ": "Oil & Gas",
     "BAJAJ-AUTO-EQ": "Automobile", "M&M-EQ": "Automobile", "MARUTI-EQ": "Automobile",
     "HEROMOTOCO-EQ": "Automobile", "EICHERMOT-EQ": "Automobile", "TVSMOTOR-EQ": "Automobile", 
@@ -209,28 +167,20 @@ STOCKS = {
     "ENGINERSIN-EQ": "Infrastructure", "PNCINFRA-EQ": "Infrastructure", "GRINFRA-EQ": "Infrastructure"
 }
 
-# Dynamically load the matched NSE/BSE tickers
-VCP_STOCKS = get_vcp_stocks("VCP_Stocks_Yahoo.csv")
+VCP_STOCKS = get_vcp_stocks()
 
-# ==========================================
-# 5. CACHED DATA FETCHERS
-# ==========================================
 @st.cache_data(ttl=86400)
 def get_market_caps():
     caps = {}
     def fetch_cap(symbol):
-        yf_symbol = symbol.replace("-EQ", ".NS")
         try:
-            return symbol, yf.Ticker(yf_symbol).info.get('marketCap', 1)
-        except Exception:
+            return symbol, yf.Ticker(symbol.replace("-EQ", ".NS")).info.get('marketCap', 1)
+        except:
             return symbol, 1
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        futures = [executor.submit(fetch_cap, sym) for sym in STOCKS.keys()]
-        for future in concurrent.futures.as_completed(futures):
+        for future in concurrent.futures.as_completed([executor.submit(fetch_cap, sym) for sym in STOCKS.keys()]):
             sym, cap = future.result()
             caps[sym] = cap
-            
     return caps
 
 @st.cache_data(ttl=86400)
@@ -242,260 +192,201 @@ def get_token_map():
             st.error(f"⚠️ Angel One Master List Blocked: HTTP {res.status_code}")
             return {}
         
-        response = res.json()
+        angel_nse_map = {item.get("symbol", ""): item.get("token", "") for item in res.json() if item.get("exch_seg") == "NSE"}
         
-        angel_nse_map = {}
-        for item in response:
-            if item.get("exch_seg") == "NSE":
-                sym = item.get("symbol", "")
-                token = item.get("token", "")
-                angel_nse_map[sym] = token
-
         aliases = {
             "HINDUNILVR-EQ": ["HINDUNILVR-EQ", "HUL-EQ"],
             "LODHA-EQ": ["LODHA-EQ", "MACROTECH-EQ"],
             "MCDOWELL-N-EQ": ["MCDOWELL-N-EQ", "UNITDSPR-EQ"],
+            "NYKAA-EQ": ["NYKAA-EQ", "FSN-EQ"],
+            "ZYDUSLIFE-EQ": ["ZYDUSLIFE-EQ", "CADILAHC-EQ"],
+            "GUJARATGAS-EQ": ["GUJARATGAS-EQ", "GUJGAS-EQ", "GUJGAS", "GUJENERGY-EQ"],
+            "AEGISCHEM-EQ": ["AEGISLOG-EQ", "AEGISCHEM"],
+            "ZOMATO-EQ": ["ETERNAL-EQ", "ETERNAL"],
+            "GMRINFRA-EQ": ["GMRAIRPORT-EQ", "GMRINFRA"]
         }
         
-        token_map = {}
+        token_map = {"NIFTY": "99926000"}
         for stock_key in STOCKS.keys():
+            base_sym = stock_key.replace("-EQ", "") 
+            
             if stock_key in angel_nse_map:
                 token_map[stock_key] = angel_nse_map[stock_key]
+            elif base_sym in angel_nse_map: 
+                token_map[stock_key] = angel_nse_map[base_sym]
             elif stock_key in aliases:
                 for alt_sym in aliases[stock_key]:
                     if alt_sym in angel_nse_map:
                         token_map[stock_key] = angel_nse_map[alt_sym]
                         break
-
-        token_map["NIFTY"] = "99926000"
         return token_map
     except Exception as e:
-        st.error(f"⚠️ Failed to download Angel One token list. Server IP may be blocked. Error: {e}")
+        st.error(f"⚠️ Failed to download Angel One token list: {e}")
         return {}
 
 def get_smart_api_session():
-    smartApi = SmartConnect(api_key=API_KEY)
-    
     if not TOTP_SECRET:
         st.error("⚠️ Missing Credentials: TOTP_SECRET is not loaded in the environment.")
         return None
-        
-    totp = pyotp.TOTP(TOTP_SECRET).now()
-    session = smartApi.generateSession(CLIENT_ID, PIN, totp)
-    if session.get('status') == False:
+    smartApi = SmartConnect(api_key=API_KEY)
+    session = smartApi.generateSession(CLIENT_ID, PIN, pyotp.TOTP(TOTP_SECRET).now())
+    if not session.get('status'):
         st.error(f"⚠️ Login Failed: {session.get('message')}")
         return None
     return smartApi
 
+def fetch_with_retry_sequential(smartApi, params, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            res = smartApi.getCandleData(params)
+            if res and res.get("status") and res.get("data"):
+                return res
+            time.sleep(1.0) 
+        except Exception:
+            time.sleep(2.0) 
+    return None
+
 @st.cache_data(ttl=300)
 def fetch_and_calculate():
     smartApi = get_smart_api_session()
-    if not smartApi:
-        return pd.DataFrame()
-
     token_map = get_token_map()
-    if not token_map:
-        return pd.DataFrame()
+    if not smartApi or not token_map: return {"data": pd.DataFrame(), "missing": []}
 
     mcaps = get_market_caps()
-    
-    # Force Indian Standard Time (UTC + 5:30)
     ist_offset = timezone(timedelta(hours=5, minutes=30))
     to_date = datetime.now(ist_offset).strftime("%Y-%m-%d %H:%M")
     from_date = (datetime.now(ist_offset) - timedelta(days=365)).strftime("%Y-%m-%d %H:%M")
 
-    nifty_params = {
-        "exchange": "NSE",
-        "symboltoken": token_map.get("NIFTY", "99926000"),
-        "interval": "ONE_DAY",
-        "fromdate": from_date,
-        "todate": to_date
-    }
-    nifty_response = smartApi.getCandleData(nifty_params)
-    
-    if not nifty_response or not nifty_response.get("status"):
-        error_msg = nifty_response.get('message', 'No response') if nifty_response else 'Empty response'
-        st.error(f"⚠️ Angel One Data Blocked (Nifty Fetch): {error_msg}")
-        return pd.DataFrame()
-        
-    if not nifty_response.get("data"):
-        st.error("⚠️ Angel One returned a successful status, but the Nifty data array is completely empty.")
-        return pd.DataFrame()
+    nifty_res = fetch_with_retry_sequential(smartApi, {"exchange": "NSE", "symboltoken": token_map["NIFTY"], "interval": "ONE_DAY", "fromdate": from_date, "todate": to_date})
+    if not nifty_res:
+        st.error("⚠️ Angel One Data Blocked (Nifty Fetch). Rate limit exceeded. Please wait 3 minutes.")
+        return {"data": pd.DataFrame(), "missing": []}
 
-    nifty_df = pd.DataFrame(nifty_response["data"], columns=["time", "open", "high", "low", "close", "volume"])
-    nifty_df['time'] = pd.to_datetime(nifty_df['time'])
+    nifty_df = pd.DataFrame(nifty_res["data"], columns=["time", "open", "high", "low", "close", "volume"])
+    nifty_df['time'] = pd.to_datetime(nifty_df['time'], utc=True).dt.tz_convert(None).dt.normalize()
     nifty_df.set_index('time', inplace=True)
     nifty_close = nifty_df["close"].ffill()
 
     results = []
-
-    for symbol, sector in STOCKS.items():
+    missing_stocks = []
+    
+    progress_bar = st.progress(0, text="Fetching Market Breadth Data from Angel One (Est. 2-3 Mins)...")
+    total_stocks = len(STOCKS)
+    
+    for i, (symbol, sector) in enumerate(STOCKS.items()):
+        progress_bar.progress((i + 1) / total_stocks, text=f"Downloading: {i+1}/{total_stocks} stocks ({symbol})")
+        
         token = token_map.get(symbol)
-        if not token:
+        if not token: 
+            missing_stocks.append(f"{symbol} (Token Missing)")
             continue
 
-        try:
-            time.sleep(0.6) 
-            candle_params = {
-                "exchange": "NSE",
-                "symboltoken": token,
-                "interval": "ONE_DAY",
-                "fromdate": from_date,
-                "todate": to_date
-            }
-            res = smartApi.getCandleData(candle_params)
-            
-            if not res or not res.get("status"):
-                time.sleep(2.0)
-                res = smartApi.getCandleData(candle_params)
-                if not res or not res.get("status") or not res.get("data"):
-                    continue
-
-            df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
-            df['time'] = pd.to_datetime(df['time'])
-            df.set_index('time', inplace=True)
-            df["close"] = df["close"].ffill()
-
-            if len(df) < 2: 
-                continue
-
-            df["SMA_20"] = df["close"].rolling(window=20).mean()
-            df["SMA_50"] = df["close"].rolling(window=50).mean()
-            df["SMA_100"] = df["close"].rolling(window=100).mean()
-            df["SMA_200"] = df["close"].rolling(window=200).mean()
-
-            delta = df["close"].diff()
-            gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
-            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
-            rs = gain / loss
-            df["RSI_14"] = 100 - (100 / (1 + rs))
-
-            aligned_nifty = nifty_close.reindex(df.index, method="ffill")
-            for period in [21, 55, 100]:
-                df[f"RS_{period}"] = df["close"].pct_change(periods=period) - aligned_nifty.pct_change(periods=period)
-
-            df["AvgVolume"] = df["volume"].rolling(window=20).mean()
-
-            latest = df.iloc[-1]
-            current_price = latest["close"]
-            prev_close = df["close"].iloc[-2]
-            
-            results.append({
-                "Ticker": symbol.replace("-EQ", ""),
-                "Sector": sector,
-                "MarketCap": mcaps.get(symbol, 1),
-                "CurrentPrice": current_price,
-                "ChangeRs": current_price - prev_close,
-                "ChangePct": ((current_price - prev_close) / prev_close) * 100,
-                "RSI_14": latest.get("RSI_14", 0),
-                "RS_21": latest.get("RS_21", 0),
-                "RS_55": latest.get("RS_55", 0),
-                "RS_100": latest.get("RS_100", 0),
-                "SMA_20": latest.get("SMA_20", 0),
-                "SMA_50": latest.get("SMA_50", 0),
-                "SMA_100": latest.get("SMA_100", 0),
-                "SMA_200": latest.get("SMA_200", 0),
-                "Volume": latest.get("volume", 0),
-                "AvgVolume": latest.get("AvgVolume", 0)
-            })
-        except Exception:
+        time.sleep(0.35) 
+        
+        res = fetch_with_retry_sequential(smartApi, {"exchange": "NSE", "symboltoken": token, "interval": "ONE_DAY", "fromdate": from_date, "todate": to_date})
+        
+        if not res: 
+            missing_stocks.append(f"{symbol} (API Rejected)")
             continue
 
-    return pd.DataFrame(results)
+        df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
+        df['time'] = pd.to_datetime(df['time'], utc=True).dt.tz_convert(None).dt.normalize()
+        df.set_index('time', inplace=True)
+        df["close"] = df["close"].ffill()
+        
+        if len(df) < 2: 
+            missing_stocks.append(f"{symbol} (Not enough data)")
+            continue
+
+        latest, prev_close = df.iloc[-1], df["close"].iloc[-2]
+        current_price = latest["close"]
+        
+        delta = df["close"].diff()
+        rs = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean() / (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+        rsi_14 = 100 - (100 / (1 + rs.iloc[-1]))
+        
+        aligned_nifty = nifty_close.reindex(df.index, method="ffill")
+        rs_vals = {p: (df["close"].pct_change(periods=p).iloc[-1] - aligned_nifty.pct_change(periods=p).iloc[-1]) for p in [21, 55, 100]}
+
+        results.append({
+            "Ticker": symbol.replace("-EQ", ""), "Sector": sector, "MarketCap": mcaps.get(symbol, 1),
+            "CurrentPrice": current_price, "ChangeRs": current_price - prev_close, "ChangePct": ((current_price - prev_close) / prev_close) * 100,
+            "RSI_14": rsi_14, "RS_21": rs_vals[21], "RS_55": rs_vals[55], "RS_100": rs_vals[100],
+            "SMA_20": df["close"].rolling(20).mean().iloc[-1], "SMA_50": df["close"].rolling(50).mean().iloc[-1],
+            "SMA_100": df["close"].rolling(100).mean().iloc[-1], "SMA_200": df["close"].rolling(200).mean().iloc[-1],
+            "Volume": latest["volume"], "AvgVolume": df["volume"].rolling(20).mean().iloc[-1]
+        })
+
+    progress_bar.empty()
+    return {"data": pd.DataFrame(results), "missing": missing_stocks}
 
 @st.cache_data(ttl=86400)
 def fetch_and_run_vcp(vcp_stocks_list):
-    if not vcp_stocks_list:
-        return {"error": "CSV list is empty or VCP_Stocks_Yahoo.csv is missing."}
+    if not vcp_stocks_list: return {"error": "CSV list is empty or missing."}
 
     session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
 
     try:
         nifty_data = yf.download("^NSEI", period="1y", interval="1d", progress=False, session=session)
-        if nifty_data.empty:
-            return {"error": "Yahoo Finance blocked the Nifty 50 download. Cloud IP may be rate-limited."}
-            
+        if nifty_data.empty: return {"error": "Yahoo Finance blocked Nifty 50. Rate limited."}
         nifty_col = "Adj Close" if "Adj Close" in nifty_data else "Close"
         nifty_close = nifty_data[nifty_col].ffill()
-        if isinstance(nifty_close, pd.DataFrame):
-            nifty_close = nifty_close.iloc[:, 0]
+        if isinstance(nifty_close, pd.DataFrame): nifty_close = nifty_close.iloc[:, 0]
     except Exception as e:
         return {"error": f"Nifty fetch crashed: {e}"}
 
     vcp_results = []
     
-    chunk_size = 50
+    progress_bar = st.progress(0, text="Starting VCP Scan...")
+    
+    # Process in chunks of 100 to maximize multithreading speed
+    chunk_size = 100
+    total_chunks = (len(vcp_stocks_list) // chunk_size) + 1
+    
     for i in range(0, len(vcp_stocks_list), chunk_size):
-        chunk = vcp_stocks_list[i:i + chunk_size]
+        chunk_num = (i // chunk_size) + 1
+        progress_bar.progress(chunk_num / total_chunks, text=f"VCP Scan: Processing batch {chunk_num}/{total_chunks}...")
         
+        chunk = vcp_stocks_list[i:i + chunk_size]
         try:
-            vcp_data = yf.download(chunk, period="1y", interval="1d", threads=False, progress=False, session=session)
-            if vcp_data.empty:
-                continue
+            # Re-enabled threads=True for lightning fast batch downloads
+            vcp_data = yf.download(chunk, period="1y", interval="1d", threads=True, progress=False, session=session)
+            if vcp_data.empty: continue
 
             is_multi = isinstance(vcp_data.columns, pd.MultiIndex)
             close_col = "Adj Close" if ("Adj Close" in vcp_data.columns.get_level_values(0) if is_multi else "Adj Close" in vcp_data) else "Close"
             
-            for yf_symbol in chunk:
+            for sym in chunk:
                 try:
                     if is_multi:
-                        if yf_symbol not in vcp_data[close_col]:
-                            continue
-                        close_series = vcp_data[close_col][yf_symbol]
-                        volume_series = vcp_data["Volume"][yf_symbol] if "Volume" in vcp_data else close_series
-                        high_series = vcp_data["High"][yf_symbol] if "High" in vcp_data else close_series
-                        low_series = vcp_data["Low"][yf_symbol] if "Low" in vcp_data else close_series
+                        if sym not in vcp_data[close_col]: continue
+                        c_s, v_s = vcp_data[close_col][sym], vcp_data["Volume"][sym] if "Volume" in vcp_data else vcp_data[close_col][sym]
+                        h_s, l_s = vcp_data["High"][sym] if "High" in vcp_data else c_s, vcp_data["Low"][sym] if "Low" in vcp_data else c_s
                     else:
-                        close_series = vcp_data[close_col]
-                        volume_series = vcp_data.get("Volume", close_series)
-                        high_series = vcp_data.get("High", close_series)
-                        low_series = vcp_data.get("Low", close_series)
+                        c_s, v_s = vcp_data[close_col], vcp_data.get("Volume", vcp_data[close_col])
+                        h_s, l_s = vcp_data.get("High", c_s), vcp_data.get("Low", c_s)
 
-                    df = pd.DataFrame({
-                        "close": close_series,
-                        "volume": volume_series,
-                        "high": high_series,
-                        "low": low_series
-                    }).dropna()
-
-                    if df.empty or len(df) < 200:
-                        continue
-
+                    df = pd.DataFrame({"close": c_s, "volume": v_s, "high": h_s, "low": l_s}).dropna()
                     res = analyze_vcp(df, nifty_close)
                     if res:
-                        res["Ticker"] = yf_symbol.replace(".NS", "").replace(".BO", "")
+                        res["Ticker"] = sym.replace(".NS", "").replace(".BO", "")
                         vcp_results.append(res)
-                except Exception:
-                    continue
-        except Exception:
-            continue
-            
-        time.sleep(0.5)
-
+                except: continue
+        except: continue
+        time.sleep(0.1) # Small breather between multithreaded batches
+        
+    progress_bar.empty()
     return {"data": vcp_results}
 
-# ==========================================
-# 6. UI RENDERING & NAVIGATION
-# ==========================================
 st.markdown("<br>", unsafe_allow_html=True)
-col1, col2, col3 = st.columns([1, 2, 1])
+_, col2, _ = st.columns([1, 2, 1])
 
 with col2:
-    selected_tab = st.radio(
-        "Navigation",
-        ["📊 Market Breadth", "🚀 VCP Screener"],
-        horizontal=True,
-        label_visibility="collapsed"
-    )
-
+    selected_tab = st.radio("Navigation", ["📊 Market Breadth", "🚀 VCP Screener"], horizontal=True, label_visibility="collapsed")
 st.divider()
 
-# ==========================================
-# TAB 1: MARKET BREADTH DASHBOARD
-# ==========================================
 if selected_tab == "📊 Market Breadth":
-    
     st.sidebar.header("Strategy Parameters")
     rs_period = st.sidebar.selectbox("Relative Strength Period", ["21 Days", "55 Days", "100 Days"], index=1)
     rsi_thresh = st.sidebar.slider("Minimum RSI", 30, 80, 50)
@@ -505,173 +396,101 @@ if selected_tab == "📊 Market Breadth":
     st.markdown("Advanced breadth tracking with dynamic Relative Strength and volume profiling.")
 
     if "market_data" not in st.session_state:
-        with st.spinner("Fetching live market data (this may take a minute)..."):
-            st.session_state.market_data = fetch_and_calculate()
+        st.session_state.market_data = fetch_and_calculate()
             
-    master_df = st.session_state.market_data.copy() if not st.session_state.market_data.empty else pd.DataFrame()
+    payload = st.session_state.market_data
+    master_df = payload.get("data", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    missing_list = payload.get("missing", []) if isinstance(payload, dict) else []
+
+    if missing_list:
+        with st.expander(f"⚠️ {len(missing_list)} Stocks Failed to Load (Click to view)"):
+            st.write(", ".join(missing_list))
 
     if not master_df.empty:
         rs_col = {"21 Days": "RS_21", "55 Days": "RS_55", "100 Days": "RS_100"}[rs_period]
 
         master_df["RS_Pass"] = master_df[rs_col].apply(lambda x: 1 if pd.notna(x) and x > 0 else 0)
         master_df["RSI_Pass"] = master_df["RSI_14"].apply(lambda x: 1 if pd.notna(x) and x > rsi_thresh else 0)
-        master_df["SMA20_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_20"]) and row["CurrentPrice"] > row["SMA_20"] else 0, axis=1)
-        master_df["SMA50_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_50"]) and row["CurrentPrice"] > row["SMA_50"] else 0, axis=1)
-        master_df["SMA100_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_100"]) and row["CurrentPrice"] > row["SMA_100"] else 0, axis=1)
-        master_df["SMA200_Pass"] = master_df.apply(lambda row: 1 if pd.notna(row["SMA_200"]) and row["CurrentPrice"] > row["SMA_200"] else 0, axis=1)
-        master_df["VolumeSurge"] = master_df.apply(lambda row: 1 if row["Volume"] > (1.5 * row["AvgVolume"]) else 0, axis=1)
+        master_df["SMA20_Pass"] = master_df.apply(lambda r: 1 if pd.notna(r["SMA_20"]) and r["CurrentPrice"] > r["SMA_20"] else 0, axis=1)
+        master_df["SMA50_Pass"] = master_df.apply(lambda r: 1 if pd.notna(r["SMA_50"]) and r["CurrentPrice"] > r["SMA_50"] else 0, axis=1)
+        master_df["SMA100_Pass"] = master_df.apply(lambda r: 1 if pd.notna(r["SMA_100"]) and r["CurrentPrice"] > r["SMA_100"] else 0, axis=1)
+        master_df["SMA200_Pass"] = master_df.apply(lambda r: 1 if pd.notna(r["SMA_200"]) and r["CurrentPrice"] > r["SMA_200"] else 0, axis=1)
+        master_df["VolumeSurge"] = master_df.apply(lambda r: 1 if r["Volume"] > (1.5 * r["AvgVolume"]) else 0, axis=1)
 
-        sectors = master_df["Sector"].unique()
-        
-        dashboard_data_table = []
-        dashboard_data_chart = []
-
-        for sector in sectors:
+        dash_tbl, dash_cht = [], []
+        for sector in master_df["Sector"].unique():
             sec_df = master_df[master_df["Sector"] == sector]
-            total_mc = sec_df["MarketCap"].sum()
-            total_stocks = len(sec_df)
+            total_mc, total_stocks = sec_df["MarketCap"].sum(), len(sec_df)
 
-            def get_table_val(flag):
-                if display_mode == "Number of Stocks":
-                    return f"{sec_df[flag].sum()} / {total_stocks}"
-                else:
-                    passed_mc = sec_df[sec_df[flag] == 1]["MarketCap"].sum()
-                    return f"{(passed_mc / total_mc * 100):.1f}%" if total_mc > 0 else "0.0%"
+            def get_val(flag, ret_fmt="table"):
+                val = sec_df[flag].sum() if display_mode == "Number of Stocks" else (sec_df[sec_df[flag] == 1]["MarketCap"].sum() / max(total_mc, 1) * 100)
+                if ret_fmt == "chart": return (val / max(total_stocks, 1) * 100) if display_mode == "Number of Stocks" else val
+                return f"{val} / {total_stocks}" if display_mode == "Number of Stocks" else f"{val:.1f}%"
 
-            def get_chart_val(flag):
-                if display_mode == "Number of Stocks":
-                    return (sec_df[flag].sum() / total_stocks * 100) if total_stocks > 0 else 0
-                else:
-                    passed_mc = sec_df[sec_df[flag] == 1]["MarketCap"].sum()
-                    return (passed_mc / total_mc * 100) if total_mc > 0 else 0
-
-            dashboard_data_table.append({
-                "Sectors": sector,
-                f"RS > 0 ({rs_period})": get_table_val("RS_Pass"),
-                f"RSI > {rsi_thresh}": get_table_val("RSI_Pass"),
-                "SMA 20": get_table_val("SMA20_Pass"),
-                "SMA 50": get_table_val("SMA50_Pass"),
-                "SMA 100": get_table_val("SMA100_Pass"),
-                "SMA 200": get_table_val("SMA200_Pass")
-            })
-            
-            dashboard_data_chart.append({
-                "Sectors": sector,
-                f"RS > 0 ({rs_period})": get_chart_val("RS_Pass")
-            })
-
-        final_table_df = pd.DataFrame(dashboard_data_table)
-        final_chart_df = pd.DataFrame(dashboard_data_chart)
+            dash_tbl.append({"Sectors": sector, f"RS > 0 ({rs_period})": get_val("RS_Pass"), f"RSI > {rsi_thresh}": get_val("RSI_Pass"), "SMA 20": get_val("SMA20_Pass"), "SMA 50": get_val("SMA50_Pass"), "SMA 100": get_val("SMA100_Pass"), "SMA 200": get_val("SMA200_Pass")})
+            dash_cht.append({"Sectors": sector, f"RS > 0 ({rs_period})": get_val("RS_Pass", "chart")})
 
         st.subheader(f"Sector Rotation ({display_mode})")
-        fig = px.bar(final_chart_df, x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty 50 ({rs_period})")
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(px.bar(pd.DataFrame(dash_cht), x="Sectors", y=f"RS > 0 ({rs_period})", color="Sectors", text_auto='.1f', title=f"Percentage of Sector Outperforming Nifty ({rs_period})"), width="stretch")
 
         st.subheader("Market Breadth Data")
-        st.dataframe(final_table_df, width="stretch", hide_index=True)
+        st.dataframe(pd.DataFrame(dash_tbl), width="stretch", hide_index=True)
         
         if st.button("Refresh Live Data"):
             fetch_and_calculate.clear()
             get_token_map.clear()
-            if "market_data" in st.session_state:
-                del st.session_state.market_data
+            st.session_state.pop("market_data", None)
             st.rerun()
 
         st.markdown("---")
-        
         st.subheader("Screener & Export")
         
-        sel_col1, sel_col2, sel_col3 = st.columns(3)
-        with sel_col1:
-            selected_sector = st.selectbox("1. Select a Sector:", final_table_df["Sectors"].tolist())
-        with sel_col2:
-            selected_indicator = st.selectbox(
-                "2. Select an Indicator:", 
-                ["Relative Strength", "RSI Threshold", "SMA 20", "SMA 50", "SMA 100", "SMA 200", "Volume Surge"]
-            )
-        with sel_col3:
-            sort_by = st.selectbox("3. Sort Results By:", ["Highest % Gain", "Highest RSI", "Highest RS"])
+        sel1, sel2, sel3 = st.columns(3)
+        with sel1: sel_sec = st.selectbox("1. Select a Sector:", pd.DataFrame(dash_tbl)["Sectors"].tolist())
+        with sel2: sel_ind = st.selectbox("2. Select an Indicator:", ["Relative Strength", "RSI Threshold", "SMA 20", "SMA 50", "SMA 100", "SMA 200", "Volume Surge"])
+        with sel3: sort_by = st.selectbox("3. Sort Results By:", ["Highest % Gain", "Highest RSI", "Highest RS"])
         
-        flag_map = {
-            "Relative Strength": "RS_Pass", 
-            "RSI Threshold": "RSI_Pass", 
-            "SMA 20": "SMA20_Pass", 
-            "SMA 50": "SMA50_Pass", 
-            "SMA 100": "SMA100_Pass", 
-            "SMA 200": "SMA200_Pass", 
-            "Volume Surge": "VolumeSurge"
-        }
-        
-        winning_stocks = master_df[(master_df["Sector"] == selected_sector) & (master_df[flag_map[selected_indicator]] == 1)].copy()
+        flag_map = {"Relative Strength": "RS_Pass", "RSI Threshold": "RSI_Pass", "SMA 20": "SMA20_Pass", "SMA 50": "SMA50_Pass", "SMA 100": "SMA100_Pass", "SMA 200": "SMA200_Pass", "Volume Surge": "VolumeSurge"}
+        winning = master_df[(master_df["Sector"] == sel_sec) & (master_df[flag_map[sel_ind]] == 1)].copy()
 
-        if sort_by == "Highest % Gain":
-            winning_stocks = winning_stocks.sort_values(by="ChangePct", ascending=False)
-        elif sort_by == "Highest RSI":
-            winning_stocks = winning_stocks.sort_values(by="RSI_14", ascending=False)
-        else:
-            winning_stocks = winning_stocks.sort_values(by=rs_col, ascending=False)
+        if sort_by == "Highest % Gain": winning = winning.sort_values(by="ChangePct", ascending=False)
+        elif sort_by == "Highest RSI": winning = winning.sort_values(by="RSI_14", ascending=False)
+        else: winning = winning.sort_values(by=rs_col, ascending=False)
 
-        if not winning_stocks.empty:
-            csv = winning_stocks[["Ticker", "CurrentPrice", "ChangePct", "RSI_14", rs_col, "VolumeSurge"]].to_csv(index=False).encode('utf-8')
-            st.download_button(label="Download Data (CSV)", data=csv, file_name=f"{selected_sector}_screener.csv", mime="text/csv")
-            
-            st.write("")
+        if not winning.empty:
+            st.download_button("Download Data (CSV)", winning[["Ticker", "CurrentPrice", "ChangePct", "RSI_14", rs_col, "VolumeSurge"]].to_csv(index=False).encode('utf-8'), f"{sel_sec}_screener.csv", "text/csv")
             cols = st.columns(3)
-            for i, (_, stock) in enumerate(winning_stocks.iterrows()):
+            for i, (_, stock) in enumerate(winning.iterrows()):
                 col = cols[i % 3] 
-                color = "green" if stock["ChangeRs"] >= 0 else "red"
-                sign = "+" if stock["ChangeRs"] >= 0 else ""
-                surge_text = " | <strong>Volume Breakout</strong>" if stock["VolumeSurge"] == 1 else ""
-                
+                color, sign = ("green", "+") if stock["ChangeRs"] >= 0 else ("red", "")
+                surge = " | <strong>Volume Breakout</strong>" if stock["VolumeSurge"] == 1 else ""
                 with col:
-                        st.markdown(
-                            f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">
-<div style="display: flex; justify-content: space-between; align-items: center;">
-<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row['Ticker']}</span>
-{vdu_badge}
-</div>
-<div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">
-₹{row['LatestPrice']:.2f}
-</div>
-<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">
-<b>VCP Rating Score:</b> <span style="color: #0066cc; font-weight: 600;">{row['VCPScore']}/100</span><br>
-<b>Pivot Tightness:</b> {row['PivotTightnessPct']:.1f}% (10-Day Range)<br>
-<b>Base Depth:</b> {row['BaseDepthPct']:.1f}%<br>
-<b>Dist. from 52W High:</b> {row['DistFrom52wHigh']:.1f}%<br>
-<b>55D Rel. Strength:</b> +{row['RS55']:.1f}%
-</div>
-</div>""",
-                            unsafe_allow_html=True
-                        )
-        else:
-            st.write("No stocks meet this criteria right now.")
+                    html_card = (
+                        f'<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 16px;">'
+                        f'<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 17px; color: #1d1d1f;">{stock["Ticker"]}</span>'
+                        f'<span style="color: #0066cc; font-size: 14px; font-weight: 400;">{surge}</span><br>'
+                        f'<div style="margin-top: 12px; font-size: 17px; color: #1d1d1f; font-weight: 400; line-height: 1.47;">'
+                        f'₹{stock["CurrentPrice"]:.2f} <br>'
+                        f'<span style="color: {color}; font-weight: 600;">{sign}₹{stock["ChangeRs"]:.2f} ({sign}{stock["ChangePct"]:.2f}%)</span><br></div>'
+                        f'<div style="margin-top: 17px; font-size: 14px; color: #7a7a7a; font-weight: 400;">RSI: {stock["RSI_14"]:.1f} &nbsp;|&nbsp; RS: {stock[rs_col]*100:.1f}%</div></div>'
+                    )
+                    st.markdown(html_card, unsafe_allow_html=True)
+        else: st.write("No stocks meet this criteria right now.")
 
-# ==========================================
-# TAB 2: VCP SCREENER
-# ==========================================
 elif selected_tab == "🚀 VCP Screener":
-    
-    st.markdown("""
-        <h2 style='font-family: -apple-system, sans-serif; font-weight: 600; color: #1d1d1f; letter-spacing: -0.374px;'>
-            Minervini Volatility Contraction Pattern (VCP) Screener
-        </h2>
-        <p style='font-size: 17px; color: #7a7a7a; margin-bottom: 24px;'>
-            Identifies Stage-2 uptrend stocks experiencing extreme volatility compression and volume dry-up (VDU) prior to explosive breakouts.
-        </p>
-    """, unsafe_allow_html=True)
+    st.markdown("<h2 style='font-family: -apple-system, sans-serif; font-weight: 600; color: #1d1d1f; letter-spacing: -0.374px;'>Minervini Volatility Contraction Pattern (VCP) Screener</h2><p style='font-size: 17px; color: #7a7a7a; margin-bottom: 24px;'>Identifies Stage-2 uptrend stocks experiencing extreme volatility compression and volume dry-up (VDU) prior to explosive breakouts.</p>", unsafe_allow_html=True)
 
     if st.button("🔄 Refresh VCP Scan Data"):
         fetch_and_run_vcp.clear()
-        if "vcp_results" in st.session_state:
-            del st.session_state.vcp_results
+        st.session_state.pop("vcp_results", None)
         st.rerun()
 
     st.sidebar.markdown("### VCP Parameters")
-    min_vcp_score = st.sidebar.slider("Minimum VCP Score", min_value=50, max_value=90, value=60, step=5)
-    max_tightness = st.sidebar.slider("Max Pivot Tightness (%)", min_value=2.0, max_value=10.0, value=6.0, step=0.5)
+    min_vcp_score = st.sidebar.slider("Minimum VCP Score", 50, 90, 60, 5)
+    max_tightness = st.sidebar.slider("Max Pivot Tightness (%)", 2.0, 10.0, 6.0, 0.5)
 
     if "vcp_results" not in st.session_state:
-        with st.spinner(f"Analyzing universe of {len(VCP_STOCKS)} stocks for Stage 2 VCP setups..."):
+        with st.spinner(f"Analyzing universe of {len(VCP_STOCKS)} stocks..."):
             st.session_state.vcp_results = fetch_and_run_vcp(VCP_STOCKS)
             
     raw_results = st.session_state.vcp_results
@@ -680,47 +499,30 @@ elif selected_tab == "🚀 VCP Screener":
         st.error(f"⚠️ {raw_results['error']}")
     else:
         actual_data = raw_results.get("data", []) if isinstance(raw_results, dict) else raw_results
-        
         if not actual_data:
-            st.warning("No data returned or calculation pending. Click 'Refresh VCP Scan Data' to run the scan. (Note: Also check your CSV ticker symbols are standard NSE tickers).")
+            st.warning("No data returned or calculation pending. Click 'Refresh VCP Scan Data'.")
         else:
-            filtered_results = [
-                r for r in actual_data 
-                if r["VCPScore"] >= min_vcp_score and r["PivotTightnessPct"] <= max_tightness
-            ]
-
-            if not filtered_results:
-                st.warning(f"No stocks currently meet a VCP Score ≥ {min_vcp_score} and Tightness ≤ {max_tightness}%.")
+            filtered = [r for r in actual_data if r["VCPScore"] >= min_vcp_score and r["PivotTightnessPct"] <= max_tightness]
+            if not filtered:
+                st.warning(f"No stocks meet VCP Score ≥ {min_vcp_score} and Tightness ≤ {max_tightness}%.")
             else:
-                vcp_df = pd.DataFrame(filtered_results).sort_values(by="VCPScore", ascending=False)
-                
+                vcp_df = pd.DataFrame(filtered).sort_values(by="VCPScore", ascending=False)
                 st.markdown(f"**Found {len(vcp_df)} Institutional VCP Setups out of {len(VCP_STOCKS)} stocks**")
-                
                 cols = st.columns(3)
                 for idx, row in vcp_df.reset_index(drop=True).iterrows():
                     col = cols[idx % 3]
-                    
-                    vdu_badge = '<span style="background-color: #0066cc; color: white; font-size: 11px; padding: 3px 8px; border-radius: 9999px; font-weight: 600;">VDU ACTIVE</span>' if row['IsVDU'] else ''
-                    
+                    vdu = '<span style="background-color: #0066cc; color: white; font-size: 11px; padding: 3px 8px; border-radius: 9999px; font-weight: 600;">VDU ACTIVE</span>' if row['IsVDU'] else ''
                     with col:
-                        st.markdown(
-                            f"""<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row['Ticker']}</span>
-        {vdu_badge}
-    </div>
-
-    <div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">
-        ₹{row['LatestPrice']:.2f}
-    </div>
-
-    <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">
-        <b>VCP Rating Score:</b> <span style="color: #0066cc; font-weight: 600;">{row['VCPScore']}/100</span><br>
-        <b>Pivot Tightness:</b> {row['PivotTightnessPct']:.1f}% (10-Day Range)<br>
-        <b>Base Depth:</b> {row['BaseDepthPct']:.1f}%<br>
-        <b>Dist. from 52W High:</b> {row['DistFrom52wHigh']:.1f}%<br>
-        <b>55D Rel. Strength:</b> +{row['RS55']:.1f}%
-    </div>
-    </div>""",
-                            unsafe_allow_html=True
+                        html_card = (
+                            f'<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">'
+                            f'<div style="display: flex; justify-content: space-between; align-items: center;">'
+                            f'<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row["Ticker"]}</span>{vdu}</div>'
+                            f'<div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">₹{row["LatestPrice"]:.2f}</div>'
+                            f'<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">'
+                            f'<b>VCP Rating Score:</b> <span style="color: #0066cc; font-weight: 600;">{row["VCPScore"]}/100</span><br>'
+                            f'<b>Pivot Tightness:</b> {row["PivotTightnessPct"]:.1f}% (10-Day Range)<br>'
+                            f'<b>Base Depth:</b> {row["BaseDepthPct"]:.1f}%<br>'
+                            f'<b>Dist. from 52W High:</b> {row["DistFrom52wHigh"]:.1f}%<br>'
+                            f'<b>55D Rel. Strength:</b> +{row["RS55"]:.1f}%</div></div>'
                         )
+                        st.markdown(html_card, unsafe_allow_html=True)
