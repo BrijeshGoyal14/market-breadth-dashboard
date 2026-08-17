@@ -96,31 +96,55 @@ def analyze_vcp(df, nifty_close):
 
 def analyze_pocket_pivot(df):
     if len(df) < 15: return False
-    
     latest_close = df["close"].iloc[-1]
     prev_close = df["close"].iloc[-2]
-    if latest_close <= prev_close:
-        return False
-        
-    latest_volume = df["volume"].iloc[-1]
+    if latest_close <= prev_close: return False
     
+    latest_volume = df["volume"].iloc[-1]
     max_down_volume = 0
     for i in range(-11, -1):
         day_close = df["close"].iloc[i]
         day_prev = df["close"].iloc[i-1]
         day_vol = df["volume"].iloc[i]
-        
         if day_close < day_prev:
-            if day_vol > max_down_volume:
-                max_down_volume = day_vol
+            if day_vol > max_down_volume: max_down_volume = day_vol
                 
     sma_50 = df["close"].rolling(50).mean().iloc[-1]
     is_above_sma = latest_close > sma_50 if pd.notna(sma_50) else True
+    return latest_volume > max_down_volume and is_above_sma
+
+def analyze_avwap_squeeze(df):
+    if len(df) < 60: return None
+    lookback_window = min(120, len(df))
+    anchor_idx = df["low"].iloc[-lookback_window:].idxmin()
     
-    if latest_volume > max_down_volume and is_above_sma:
-        return True
-        
-    return False
+    df_anchored = df.loc[anchor_idx:].copy()
+    if len(df_anchored) < 10: return None
+    
+    typical_price = (df_anchored.get("high", df_anchored["close"]) + df_anchored.get("low", df_anchored["close"]) + df_anchored["close"]) / 3
+    pv = typical_price * df_anchored["volume"]
+    avwap = pv.cumsum() / df_anchored["volume"].cumsum()
+    
+    df_anchored["avwap"] = avwap
+    latest_price = df_anchored["close"].iloc[-1]
+    latest_avwap = df_anchored["avwap"].iloc[-1]
+    
+    dist_from_avwap_pct = abs((latest_price - latest_avwap) / latest_avwap) * 100
+    recent_high = df_anchored["close"].iloc[-5:].max()
+    recent_low = df_anchored["close"].iloc[-5:].min()
+    tightness_pct = ((recent_high - recent_low) / latest_avwap) * 100
+    
+    sma_50 = df["close"].rolling(50).mean().iloc[-1]
+    is_uptrend = latest_price > sma_50 if pd.notna(sma_50) else True
+
+    if dist_from_avwap_pct <= 2.5 and tightness_pct <= 5.0 and is_uptrend:
+        return {
+            "LatestPrice": latest_price,
+            "AVWAP": latest_avwap,
+            "DistPct": dist_from_avwap_pct,
+            "TightnessPct": tightness_pct
+        }
+    return None
 
 STOCKS = {
     "HDFCBANK-EQ": "Financials", "ICICIBANK-EQ": "Financials", "SBIN-EQ": "Financials",
@@ -217,12 +241,8 @@ def get_token_map():
     url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
     try:
         res = requests.get(url, timeout=15)
-        if res.status_code != 200:
-            st.error(f"⚠️ Angel One Master List Blocked: HTTP {res.status_code}")
-            return {}
-        
+        if res.status_code != 200: return {}
         angel_nse_map = {item.get("symbol", ""): item.get("token", "") for item in res.json() if item.get("exch_seg") == "NSE"}
-        
         aliases = {
             "HINDUNILVR-EQ": ["HINDUNILVR-EQ", "HUL-EQ"],
             "LODHA-EQ": ["LODHA-EQ", "MACROTECH-EQ"],
@@ -235,45 +255,30 @@ def get_token_map():
             "ZOMATO-EQ": ["ETERNAL-EQ", "ETERNAL"],
             "GMRINFRA-EQ": ["GMRAIRPORT-EQ", "GMRINFRA"]
         }
-        
         token_map = {"NIFTY": "99926000"}
         for stock_key in STOCKS.keys():
             base_sym = stock_key.replace("-EQ", "") 
-            
-            if stock_key in angel_nse_map:
-                token_map[stock_key] = angel_nse_map[stock_key]
-            elif base_sym in angel_nse_map: 
-                token_map[stock_key] = angel_nse_map[base_sym]
+            if stock_key in angel_nse_map: token_map[stock_key] = angel_nse_map[stock_key]
+            elif base_sym in angel_nse_map: token_map[stock_key] = angel_nse_map[base_sym]
             elif stock_key in aliases:
                 for alt_sym in aliases[stock_key]:
-                    if alt_sym in angel_nse_map:
-                        token_map[stock_key] = angel_nse_map[alt_sym]
-                        break
+                    if alt_sym in angel_nse_map: token_map[stock_key] = angel_nse_map[alt_sym]; break
         return token_map
-    except Exception as e:
-        st.error(f"⚠️ Failed to download Angel One token list: {e}")
-        return {}
+    except: return {}
 
 def get_smart_api_session():
-    if not TOTP_SECRET:
-        st.error("⚠️ Missing Credentials: TOTP_SECRET is not loaded in the environment.")
-        return None
+    if not TOTP_SECRET: return None
     smartApi = SmartConnect(api_key=API_KEY)
     session = smartApi.generateSession(CLIENT_ID, PIN, pyotp.TOTP(TOTP_SECRET).now())
-    if not session.get('status'):
-        st.error(f"⚠️ Login Failed: {session.get('message')}")
-        return None
-    return smartApi
+    return smartApi if session.get('status') else None
 
 def fetch_with_retry_sequential(smartApi, params, max_retries=3):
-    for attempt in range(max_retries):
+    for _ in range(max_retries):
         try:
             res = smartApi.getCandleData(params)
-            if res and res.get("status") and res.get("data"):
-                return res
-            time.sleep(1.0) 
-        except Exception:
-            time.sleep(2.0) 
+            if res and res.get("status") and res.get("data"): return res
+            time.sleep(1.0)
+        except: time.sleep(2.0)
     return None
 
 @st.cache_data(ttl=300)
@@ -288,49 +293,34 @@ def fetch_and_calculate():
     from_date = (datetime.now(ist_offset) - timedelta(days=365)).strftime("%Y-%m-%d %H:%M")
 
     nifty_res = fetch_with_retry_sequential(smartApi, {"exchange": "NSE", "symboltoken": token_map["NIFTY"], "interval": "ONE_DAY", "fromdate": from_date, "todate": to_date})
-    if not nifty_res:
-        st.error("⚠️ Angel One Data Blocked (Nifty Fetch). Rate limit exceeded. Please wait 3 minutes.")
-        return {"data": pd.DataFrame(), "missing": []}
+    if not nifty_res: return {"data": pd.DataFrame(), "missing": []}
 
     nifty_df = pd.DataFrame(nifty_res["data"], columns=["time", "open", "high", "low", "close", "volume"])
     nifty_df['time'] = pd.to_datetime(nifty_df['time'], utc=True).dt.tz_convert(None).dt.normalize()
     nifty_df.set_index('time', inplace=True)
     nifty_close = nifty_df["close"].ffill()
 
-    results = []
-    missing_stocks = []
-    
-    progress_bar = st.progress(0, text="Fetching Market Breadth Data from Angel One (Est. 2-3 Mins)...")
+    results, missing_stocks = [], []
+    progress_bar = st.progress(0, text="Fetching Market Breadth Data from Angel One...")
     total_stocks = len(STOCKS)
     
     for i, (symbol, sector) in enumerate(STOCKS.items()):
         progress_bar.progress((i + 1) / total_stocks, text=f"Downloading: {i+1}/{total_stocks} stocks ({symbol})")
-        
         token = token_map.get(symbol)
-        if not token: 
-            missing_stocks.append(f"{symbol} (Token Missing)")
-            continue
+        if not token: missing_stocks.append(f"{symbol} (Token Missing)"); continue
 
         time.sleep(0.35) 
-        
         res = fetch_with_retry_sequential(smartApi, {"exchange": "NSE", "symboltoken": token, "interval": "ONE_DAY", "fromdate": from_date, "todate": to_date})
-        
-        if not res: 
-            missing_stocks.append(f"{symbol} (API Rejected)")
-            continue
+        if not res: missing_stocks.append(f"{symbol} (API Rejected)"); continue
 
         df = pd.DataFrame(res["data"], columns=["time", "open", "high", "low", "close", "volume"])
         df['time'] = pd.to_datetime(df['time'], utc=True).dt.tz_convert(None).dt.normalize()
         df.set_index('time', inplace=True)
         df["close"] = df["close"].ffill()
-        
-        if len(df) < 2: 
-            missing_stocks.append(f"{symbol} (Not enough data)")
-            continue
+        if len(df) < 2: missing_stocks.append(f"{symbol} (Not enough data)"); continue
 
         latest, prev_close = df.iloc[-1], df["close"].iloc[-2]
         current_price = latest["close"]
-        
         delta = df["close"].diff()
         rs = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean() / (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
         rsi_14 = 100 - (100 / (1 + rs.iloc[-1]))
@@ -352,38 +342,30 @@ def fetch_and_calculate():
 
 @st.cache_data(ttl=86400)
 def fetch_and_run_vcp(vcp_stocks_list):
-    if not vcp_stocks_list: return {"error": "CSV list is empty or missing."}
-
+    if not vcp_stocks_list: return {"error": "CSV list is empty."}
     session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
     try:
         nifty_data = yf.download("^NSEI", period="1y", interval="1d", progress=False, session=session)
-        if nifty_data.empty: return {"error": "Yahoo Finance blocked Nifty 50. Rate limited."}
         nifty_col = "Adj Close" if "Adj Close" in nifty_data else "Close"
         nifty_close = nifty_data[nifty_col].ffill()
         if isinstance(nifty_close, pd.DataFrame): nifty_close = nifty_close.iloc[:, 0]
-    except Exception as e:
-        return {"error": f"Nifty fetch crashed: {e}"}
+    except: return {"error": "Nifty fetch crashed."}
 
     vcp_results = []
     progress_bar = st.progress(0, text="Starting VCP Scan...")
-    
     chunk_size = 100
     total_chunks = (len(vcp_stocks_list) // chunk_size) + 1
     
     for i in range(0, len(vcp_stocks_list), chunk_size):
         chunk_num = (i // chunk_size) + 1
         progress_bar.progress(chunk_num / total_chunks, text=f"VCP Scan: Processing batch {chunk_num}/{total_chunks}...")
-        
         chunk = vcp_stocks_list[i:i + chunk_size]
         try:
             vcp_data = yf.download(chunk, period="1y", interval="1d", threads=True, progress=False, session=session)
             if vcp_data.empty: continue
-
             is_multi = isinstance(vcp_data.columns, pd.MultiIndex)
             close_col = "Adj Close" if ("Adj Close" in vcp_data.columns.get_level_values(0) if is_multi else "Adj Close" in vcp_data) else "Close"
-            
             for sym in chunk:
                 try:
                     if is_multi:
@@ -393,44 +375,34 @@ def fetch_and_run_vcp(vcp_stocks_list):
                     else:
                         c_s, v_s = vcp_data[close_col], vcp_data.get("Volume", vcp_data[close_col])
                         h_s, l_s = vcp_data.get("High", c_s), vcp_data.get("Low", c_s)
-
                     df = pd.DataFrame({"close": c_s, "volume": v_s, "high": h_s, "low": l_s}).dropna()
                     res = analyze_vcp(df, nifty_close)
-                    if res:
-                        res["Ticker"] = sym.replace(".NS", "").replace(".BO", "")
-                        vcp_results.append(res)
+                    if res: res["Ticker"] = sym.replace(".NS", "").replace(".BO", ""); vcp_results.append(res)
                 except: continue
         except: continue
         time.sleep(0.1)
-        
     progress_bar.empty()
     return {"data": vcp_results}
 
 @st.cache_data(ttl=86400)
 def fetch_and_run_pocket_pivots(vcp_stocks_list):
     if not vcp_stocks_list: return []
-
     session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"})
-
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
     pp_results = []
     progress_bar = st.progress(0, text="Starting Pocket Pivot Scan...")
-    
     chunk_size = 100
     total_chunks = (len(vcp_stocks_list) // chunk_size) + 1
     
     for i in range(0, len(vcp_stocks_list), chunk_size):
         chunk_num = (i // chunk_size) + 1
-        progress_bar.progress(chunk_num / total_chunks, text=f"Pocket Pivot Scan: Processing batch {chunk_num}/{total_chunks}...")
-        
+        progress_bar.progress(chunk_num / total_chunks, text=f"Pocket Pivot Scan: Batch {chunk_num}/{total_chunks}...")
         chunk = vcp_stocks_list[i:i + chunk_size]
         try:
             data = yf.download(chunk, period="6mo", interval="1d", threads=True, progress=False, session=session)
             if data.empty: continue
-
             is_multi = isinstance(data.columns, pd.MultiIndex)
             close_col = "Adj Close" if ("Adj Close" in data.columns.get_level_values(0) if is_multi else "Adj Close" in data) else "Close"
-            
             for sym in chunk:
                 try:
                     if is_multi:
@@ -438,34 +410,70 @@ def fetch_and_run_pocket_pivots(vcp_stocks_list):
                         c_s, v_s = data[close_col][sym], data["Volume"][sym] if "Volume" in data else data[close_col][sym]
                     else:
                         c_s, v_s = data[close_col], data.get("Volume", data[close_col])
-
                     df = pd.DataFrame({"close": c_s, "volume": v_s}).dropna()
                     if analyze_pocket_pivot(df):
                         latest_price = df["close"].iloc[-1]
                         prev_close = df["close"].iloc[-2]
                         change_pct = ((latest_price - prev_close) / prev_close) * 100
                         avg_vol = df["volume"].rolling(20).mean().iloc[-1]
-                        
                         pp_results.append({
-                            "Ticker": sym.replace(".NS", "").replace(".BO", ""),
-                            "Sector": "VCP Universe",
-                            "LatestPrice": latest_price,
-                            "ChangePct": change_pct,
-                            "Volume": df["volume"].iloc[-1],
-                            "AvgVolume": avg_vol if pd.notna(avg_vol) else 1
+                            "Ticker": sym.replace(".NS", "").replace(".BO", ""), "Sector": "VCP Universe",
+                            "LatestPrice": latest_price, "ChangePct": change_pct, "Volume": df["volume"].iloc[-1], "AvgVolume": avg_vol if pd.notna(avg_vol) else 1
                         })
                 except: continue
         except: continue
         time.sleep(0.1)
-        
     progress_bar.empty()
     return pp_results
+
+@st.cache_data(ttl=86400)
+def fetch_and_run_avwap_squeezes(vcp_stocks_list):
+    if not vcp_stocks_list: return []
+    session = requests.Session()
+    session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    avwap_results = []
+    progress_bar = st.progress(0, text="Starting AVWAP Squeeze Scan...")
+    chunk_size = 100
+    total_chunks = (len(vcp_stocks_list) // chunk_size) + 1
+    
+    for i in range(0, len(vcp_stocks_list), chunk_size):
+        chunk_num = (i // chunk_size) + 1
+        progress_bar.progress(chunk_num / total_chunks, text=f"AVWAP Squeeze Scan: Batch {chunk_num}/{total_chunks}...")
+        chunk = vcp_stocks_list[i:i + chunk_size]
+        try:
+            data = yf.download(chunk, period="1y", interval="1d", threads=True, progress=False, session=session)
+            if data.empty: continue
+            is_multi = isinstance(data.columns, pd.MultiIndex)
+            close_col = "Adj Close" if ("Adj Close" in data.columns.get_level_values(0) if is_multi else "Adj Close" in data) else "Close"
+            for sym in chunk:
+                try:
+                    if is_multi:
+                        if sym not in data[close_col]: continue
+                        c_s = data[close_col][sym]
+                        v_s = data["Volume"][sym] if "Volume" in data else c_s
+                        h_s = data["High"][sym] if "High" in data else c_s
+                        l_s = data["Low"][sym] if "Low" in data else c_s
+                    else:
+                        c_s = data[close_col]
+                        v_s = data.get("Volume", c_s)
+                        h_s = data.get("High", c_s)
+                        l_s = data.get("Low", c_s)
+                    df = pd.DataFrame({"close": c_s, "volume": v_s, "high": h_s, "low": l_s}).dropna()
+                    res = analyze_avwap_squeeze(df)
+                    if res:
+                        res["Ticker"] = sym.replace(".NS", "").replace(".BO", "")
+                        avwap_results.append(res)
+                except: continue
+        except: continue
+        time.sleep(0.1)
+    progress_bar.empty()
+    return avwap_results
 
 st.markdown("<br>", unsafe_allow_html=True)
 _, col2, _ = st.columns([1, 2, 1])
 
 with col2:
-    selected_tab = st.radio("Navigation", ["📊 Market Breadth", "🚀 VCP Screener", "🎯 Pocket Pivot Tracker"], horizontal=True, label_visibility="collapsed")
+    selected_tab = st.radio("Navigation", ["📊 Market Breadth", "🚀 VCP Screener", "🎯 Pocket Pivot Tracker", "⚓ AVWAP Squeeze"], horizontal=True, label_visibility="collapsed")
 st.divider()
 
 if selected_tab == "📊 Market Breadth":
@@ -576,7 +584,6 @@ elif selected_tab == "🚀 VCP Screener":
             st.session_state.vcp_results = fetch_and_run_vcp(VCP_STOCKS)
             
     raw_results = st.session_state.vcp_results
-
     if isinstance(raw_results, dict) and "error" in raw_results:
         st.error(f"⚠️ {raw_results['error']}")
     else:
@@ -639,5 +646,39 @@ elif selected_tab == "🎯 Pocket Pivot Tracker":
                     f'<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">'
                     f'<b>Day Change:</b> <span style="color: #34c759; font-weight: 600;">+{row["ChangePct"]:.2f}%</span><br>'
                     f'<b>Volume vs Avg:</b> {(row["Volume"]/row["AvgVolume"]):.1f}x Average</div></div>'
+                )
+                st.markdown(html_card, unsafe_allow_html=True)
+
+elif selected_tab == "⚓ AVWAP Squeeze":
+    st.markdown("<h2 style='font-family: -apple-system, sans-serif; font-weight: 600; color: #1d1d1f; letter-spacing: -0.374px;'>Anchored VWAP (AVWAP) Squeeze Screener</h2><p style='font-size: 17px; color: #7a7a7a; margin-bottom: 24px;'>Identifies stocks coiling tightly against their institutional swing-low Anchored VWAP line.</p>", unsafe_allow_html=True)
+
+    if st.button("🔄 Refresh AVWAP Squeeze Scan"):
+        fetch_and_run_avwap_squeezes.clear()
+        st.session_state.pop("avwap_squeeze_results", None)
+        st.rerun()
+
+    if "avwap_squeeze_results" not in st.session_state:
+        with st.spinner(f"Scanning universe of {len(VCP_STOCKS)} stocks for AVWAP Squeezes..."):
+            st.session_state.avwap_squeeze_results = fetch_and_run_avwap_squeezes(VCP_STOCKS)
+
+    avwap_data = st.session_state.avwap_squeeze_results
+    if not avwap_data:
+        st.warning("No AVWAP Squeeze setups detected in your VCP stock file today.")
+    else:
+        st.markdown(f"**Found {len(avwap_data)} Institutional AVWAP Squeeze Setups**")
+        cols = st.columns(3)
+        for idx, row in enumerate(avwap_data):
+            col = cols[idx % 3]
+            with col:
+                html_card = (
+                    f'<div style="background-color: #ffffff; border: 1px solid #e0e0e0; padding: 24px; border-radius: 18px; margin-bottom: 20px;">'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center;">'
+                    f'<span style="font-family: -apple-system, sans-serif; font-weight: 600; font-size: 21px; color: #1d1d1f;">{row["Ticker"]}</span>'
+                    f'<span style="background-color: #007aff; color: white; font-size: 11px; padding: 3px 8px; border-radius: 9999px; font-weight: 600;">AVWAP SQUEEZE</span></div>'
+                    f'<div style="margin-top: 16px; font-size: 28px; font-weight: 600; color: #1d1d1f; letter-spacing: -0.28px;">₹{row["LatestPrice"]:.2f}</div>'
+                    f'<div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid #f0f0f0; font-size: 14px; color: #1d1d1f; line-height: 1.6;">'
+                    f'<b>AVWAP Level:</b> ₹{row["AVWAP"]:.2f}<br>'
+                    f'<b>Distance from AVWAP:</b> {row["DistPct"]:.2f}%<br>'
+                    f'<b>Recent Tightness:</b> {row["TightnessPct"]:.2f}%</div></div>'
                 )
                 st.markdown(html_card, unsafe_allow_html=True)
