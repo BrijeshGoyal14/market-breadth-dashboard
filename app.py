@@ -227,9 +227,12 @@ def get_market_caps():
     caps = {}
     def fetch_cap(symbol):
         try:
-            return symbol, yf.Ticker(symbol.replace("-EQ", ".NS")).info.get('marketCap', 1)
+            # Using fast_info instead of .info avoids the Yahoo Finance rate limit blocks
+            ticker = yf.Ticker(symbol.replace("-EQ", ".NS"))
+            return symbol, ticker.fast_info.get('marketCap', 1)
         except:
             return symbol, 1
+            
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         for future in concurrent.futures.as_completed([executor.submit(fetch_cap, sym) for sym in STOCKS.keys()]):
             sym, cap = future.result()
